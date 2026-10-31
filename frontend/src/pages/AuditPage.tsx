@@ -112,7 +112,9 @@ export default function AuditPage() {
                       {e.target ?? '-'}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={e.result === 'allowed' ? 'success' : 'error'}>{e.result}</Badge>
+                      <Badge variant={e.result === 'allowed' ? 'success' : e.result === 'denied' ? 'error' : 'outline'}>
+                        {e.result}
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 ))}

@@ -149,6 +149,90 @@ export function getGraph(kind: 'alert' | 'entity', id: string, depth = 2): Promi
   return apiFetch<EntityGraphData>(`/graph/${kind}/${encodeURIComponent(id)}?depth=${depth}`)
 }
 
+// Cases (app/api/detection.py)
+export type CaseDecision = 'requires_investigation' | 'false_positive' | 'escalate'
+
+export interface Case {
+  case_id: string
+  alert_id: string
+  customer_id: string | null
+  fraud_category: string
+  risk_level: RiskBand
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CaseHistory {
+  history_id: string
+  changed_at: string
+  changed_by: string
+  from_status: string | null
+  to_status: string
+  decision: string | null
+  reason: string | null
+}
+
+export function getCases(params: Record<string, string | number | undefined>): Promise<Paged<Case>> {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') qs.set(k, String(v))
+  return apiFetch<Paged<Case>>(`/cases?${qs}`)
+}
+
+export function getCase(caseId: string): Promise<Case & { history: CaseHistory[] }> {
+  return apiFetch(`/cases/${encodeURIComponent(caseId)}`)
+}
+
+export function recordDecision(caseId: string, decision: CaseDecision, reason: string): Promise<Case> {
+  return apiFetch<Case>(`/cases/${encodeURIComponent(caseId)}/decision`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision, reason }),
+  })
+}
+
+export interface DetectionSummary {
+  total_alerts: number
+  open_alerts: number
+  cleared_alerts: number
+  risk_distribution: Record<RiskBand, number>
+  fraud_categories: Record<string, number>
+  case_statuses: Record<string, number>
+  open_cases: number
+}
+
+export function getSummary(): Promise<DetectionSummary> {
+  return apiFetch<DetectionSummary>('/detection/summary')
+}
+
+// AI review (app/api/ai_review.py)
+export interface AiReviewResult {
+  alert_id: string
+  base_score: number
+  ai_adjustment: number
+  final_score: number
+  risk_band: RiskBand
+  recommended_decision: string | null
+  reasoning: string | null
+  cited_evidence: string[] | null
+  ai_available: boolean
+  model_used?: string | null
+  ai_status: string
+}
+
+export function reviewAlert(alertId: string): Promise<AiReviewResult> {
+  return apiFetch<AiReviewResult>(`/ai/review/${encodeURIComponent(alertId)}`, { method: 'POST' })
+}
+
+export function reviewPending(limit = 20): Promise<{ reviewed: number; completed: number; unavailable: number }> {
+  return apiFetch(`/ai/review/run?limit=${limit}`, { method: 'POST' })
+}
+
+export const can = {
+  runDetection: (role: string) => role !== 'analyst',
+  decide: (role: string) => role !== 'analyst',
+}
+
 export interface AuditEntry {
   audit_id: string
   timestamp: string
