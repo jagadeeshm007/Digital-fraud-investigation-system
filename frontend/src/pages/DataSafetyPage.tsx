@@ -67,7 +67,7 @@ export default function DataSafetyPage() {
           <CardTitle>Revealing a value</CardTitle>
           <CardDescription>
             Only a Supervisor can reveal a masked field, from a case, and every reveal is written to the audit trail.
-            Reveals become available once cases arrive in B2.
+            Open a case and use Reveal next to a customer field.
           </CardDescription>
         </CardHeader>
         <CardPanel>

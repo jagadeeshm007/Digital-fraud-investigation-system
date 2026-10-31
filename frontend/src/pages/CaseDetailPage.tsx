@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ExternalLinkIcon } from 'lucide-react'
+import { ArrowLeftIcon, EyeIcon, EyeOffIcon, ExternalLinkIcon, LockIcon } from 'lucide-react'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router'
 import PageHeader from '@/components/PageHeader'
@@ -21,8 +21,18 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { toastManager } from '@/components/ui/toast'
-import { can, getCase, recordDecision, type Case, type CaseDecision, type CaseHistory } from '@/lib/api'
-import { ROLE_LABELS, useRole } from '@/lib/role'
+import {
+  can,
+  getCase,
+  PII_FIELDS,
+  recordDecision,
+  revealPii,
+  type Case,
+  type CaseDecision,
+  type CaseHistory,
+  type PiiField,
+} from '@/lib/api'
+import { ROLE_LABELS, type Role, useRole } from '@/lib/role'
 import { StatusBadge } from '@/pages/CasesPage'
 
 const DECISIONS: { value: CaseDecision; label: string; hint: string }[] = [
@@ -35,7 +45,9 @@ const FINAL = new Set(['closed', 'escalated'])
 export default function CaseDetailPage() {
   const { caseId = '' } = useParams()
   const role = useRole()
-  const [item, setItem] = useState<(Case & { history: CaseHistory[] }) | null>(null)
+  const [item, setItem] = useState<(Case & { customer: Record<PiiField, string> | null; history: CaseHistory[] }) | null>(
+    null,
+  )
   const [error, setError] = useState<string | null>(null)
   const [decision, setDecision] = useState<CaseDecision>('requires_investigation')
   const [reason, setReason] = useState('')
@@ -117,6 +129,8 @@ export default function CaseDetailPage() {
           <ExternalLinkIcon />
         </Button>
       </div>
+
+      {item.customer && <CustomerCard caseId={item.case_id} masked={item.customer} role={role} />}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Card>
@@ -211,5 +225,70 @@ export default function CaseDetailPage() {
         </AlertDialogPopup>
       </AlertDialog>
     </section>
+  )
+}
+
+/** Masked customer fields; a supervisor can reveal one at a time, and each reveal is audited server-side. */
+function CustomerCard({ caseId, masked, role }: { caseId: string; masked: Record<PiiField, string>; role: Role }) {
+  const [revealed, setRevealed] = useState<Partial<Record<PiiField, string>>>({})
+  const [busy, setBusy] = useState<PiiField | null>(null)
+  const allowed = can.reveal(role)
+
+  // Switching away from Supervisor (or to another case) hides everything again.
+  useEffect(() => setRevealed({}), [role, caseId])
+
+  const toggle = async (field: PiiField) => {
+    if (revealed[field] !== undefined) {
+      setRevealed((r) => ({ ...r, [field]: undefined }))
+      return
+    }
+    setBusy(field)
+    try {
+      const { plaintext_value } = await revealPii(caseId, field)
+      setRevealed((r) => ({ ...r, [field]: plaintext_value }))
+      toastManager.add({ type: 'info', title: 'Value revealed', description: 'This reveal was written to the audit trail.' })
+    } catch (e) {
+      toastManager.add({ type: 'error', title: 'Reveal refused', description: e instanceof Error ? e.message : '' })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Customer details</CardTitle>
+        <CardDescription>
+          {allowed
+            ? 'Masked by default. Each reveal is recorded in the audit trail.'
+            : `Masked. Only a Supervisor can reveal these; the ${ROLE_LABELS[role]} role sees tokens only.`}
+        </CardDescription>
+      </CardHeader>
+      <CardPanel>
+        <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[max-content_minmax(0,1fr)_max-content]">
+          {PII_FIELDS.map(({ key, label }) => {
+            const plain = revealed[key]
+            return (
+              <div key={key} className="contents">
+                <dt className="text-muted-foreground">{label}</dt>
+                <dd className={plain === undefined ? 'font-mono text-muted-foreground' : 'break-words'}>
+                  {plain ?? masked[key]}
+                </dd>
+                <dd className="max-sm:mb-2">
+                  {allowed ? (
+                    <Button size="xs" variant="ghost" onClick={() => void toggle(key)} disabled={busy === key}>
+                      {busy === key ? <Spinner /> : plain === undefined ? <EyeIcon /> : <EyeOffIcon />}
+                      {plain === undefined ? 'Reveal' : 'Hide'}
+                    </Button>
+                  ) : (
+                    <LockIcon className="size-4 text-muted-foreground" aria-label="Locked for your role" />
+                  )}
+                </dd>
+              </div>
+            )
+          })}
+        </dl>
+      </CardPanel>
+    </Card>
   )
 }

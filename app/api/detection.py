@@ -13,6 +13,7 @@ from app.db import get_session
 from app.detection.engine import run_detection
 from app.evidence import load_evidence
 from app.exceptions import PermissionDenied
+from app.masking import REVEALABLE, mask
 from app.models import (
     Account,
     Alert,
@@ -218,7 +219,9 @@ async def get_case(
         .order_by(CaseHistory.changed_at)
     )).scalars().all()
 
-    return {**_case_dict(case), "history": [_history_dict(h) for h in history]}
+    customer = await session.get(Customer, case.customer_id) if case.customer_id else None
+    masked = {f: mask(str(getattr(customer, f)), f) for f in REVEALABLE} if customer else None
+    return {**_case_dict(case), "customer": masked, "history": [_history_dict(h) for h in history]}
 
 
 # ─── PATCH /api/cases/{case_id}/decision ─────────────────────────────────────

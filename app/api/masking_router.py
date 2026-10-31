@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit import write_audit
 from app.db import get_session
 from app.exceptions import PermissionDenied
+from app.masking import REVEALABLE
 from app.models import Case, Customer, RevealEvent
 from app.permissions import check_permission, resolve_role
 
@@ -35,9 +36,8 @@ async def reveal_pii(
         await session.commit()
         raise HTTPException(403, detail=str(e))
 
-    _REVEALABLE = {"name", "phone", "email", "address", "identity_number"}
-    if body.field not in _REVEALABLE:
-        raise HTTPException(400, detail=f"field must be one of {sorted(_REVEALABLE)}")
+    if body.field not in REVEALABLE:
+        raise HTTPException(400, detail=f"field must be one of {sorted(REVEALABLE)}")
     case = await session.get(Case, body.case_id)
     customer = await session.get(Customer, case.customer_id) if case and case.customer_id else None
     if customer is None:

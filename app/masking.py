@@ -10,6 +10,9 @@ PII_FIELDS = frozenset({
     "ip_address", "location", "beneficiary_name",
 })
 
+# Customer fields a supervisor may reveal on a case (app only, never over MCP).
+REVEALABLE = ("name", "phone", "email", "address", "identity_number")
+
 
 def mask(value: str, field: str) -> str:
     try:

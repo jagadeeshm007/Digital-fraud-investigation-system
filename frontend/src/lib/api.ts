@@ -193,8 +193,29 @@ export function getCases(params: Record<string, string | number | undefined>): P
   return apiFetch<Paged<Case>>(`/cases?${qs}`)
 }
 
-export function getCase(caseId: string): Promise<Case & { history: CaseHistory[] }> {
+// Customer PII on a case, always masked by the server; a supervisor can reveal one field at a time.
+export const PII_FIELDS = [
+  { key: 'name', label: 'Name' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'email', label: 'Email' },
+  { key: 'address', label: 'Address' },
+  { key: 'identity_number', label: 'Identity number' },
+] as const
+export type PiiField = (typeof PII_FIELDS)[number]['key']
+
+export function getCase(
+  caseId: string,
+): Promise<Case & { customer: Record<PiiField, string> | null; history: CaseHistory[] }> {
   return apiFetch(`/cases/${encodeURIComponent(caseId)}`)
+}
+
+/** Supervisor only; the server audits every attempt, allowed or denied. */
+export function revealPii(caseId: string, field: PiiField): Promise<{ plaintext_value: string }> {
+  return apiFetch(`/masking/reveal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ case_id: caseId, field }),
+  })
 }
 
 export function recordDecision(caseId: string, decision: CaseDecision, reason: string): Promise<Case> {
@@ -245,6 +266,7 @@ export function reviewPending(limit = 20): Promise<{ reviewed: number; completed
 export const can = {
   runDetection: (role: string) => role !== 'analyst',
   decide: (role: string) => role !== 'analyst',
+  reveal: (role: string) => role === 'supervisor',
 }
 
 export interface AuditEntry {

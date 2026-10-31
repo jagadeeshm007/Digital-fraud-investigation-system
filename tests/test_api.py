@@ -228,3 +228,13 @@ async def test_supervisor_reveal_is_audited(client):
     assert bad.status_code == 400
     audit = (await client.get("/api/audit", headers=as_role("analyst"))).json()["items"]
     assert any(e["action"] == "reveal_pii" and e["result"] == "allowed" for e in audit)
+
+
+async def test_case_detail_shows_customer_masked_for_every_role(client):
+    await _seed(client)
+    case_id = (await client.get("/api/cases?customer_id=C9300", headers=as_role("analyst"))).json()["items"][0]["case_id"]
+    for role in ("analyst", "investigator", "supervisor"):
+        customer = (await client.get(f"/api/cases/{case_id}", headers=as_role(role))).json()["customer"]
+        assert set(customer) == {"name", "phone", "email", "address", "identity_number"}
+        assert all(v.startswith("***-") for v in customer.values())
+        assert "Neelam Chawla" not in json.dumps(customer)
