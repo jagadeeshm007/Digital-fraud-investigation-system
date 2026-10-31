@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import write_audit
 from app.models import Alert, Case
-from app.detection.rules import DetectionHit, run_all_rules
+from app.detection.rules import run_all_rules
 
 
 def _risk_band(score: int) -> str:

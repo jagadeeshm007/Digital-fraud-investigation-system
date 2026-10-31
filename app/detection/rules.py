@@ -3,7 +3,7 @@
 Each rule is a pure async function: loads data, returns list[DetectionHit], no DB writes.
 """
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 from difflib import SequenceMatcher
 from typing import Optional
@@ -405,7 +405,7 @@ async def r3_ato(session: AsyncSession) -> list[DetectionHit]:
             ]
             if recent_bens:
                 factors.append({
-                    "factor": f"Beneficiary change within 30 minutes of successful login",
+                    "factor": "Beneficiary change within 30 minutes of successful login",
                     "points": 20,
                     "evidence_id": recent_bens[0].change_id,
                 })
@@ -471,7 +471,7 @@ async def r4_loan_ring(session: AsyncSession) -> list[DetectionHit]:
             if key in flagged:
                 continue
             flagged.add(key)
-            cust_loans = [l for l in loans if l.customer_id == cid]
+            cust_loans = [ln for ln in loans if ln.customer_id == cid]
             hits.append(DetectionHit(
                 rule_id="R4-LOAN-RING",
                 fraud_category="Lending Fraud",
@@ -601,9 +601,9 @@ async def r6_synthetic_identity(session: AsyncSession) -> list[DetectionHit]:
     hits: list[DetectionHit] = []
     flagged: set[str] = set()
 
-    def _add_identity_hit(custs: list[Customer], field: str, value: str, points: int) -> None:
+    def _add_identity_hit(custs: list[Customer], field_name: str, value: str, points: int) -> None:
         for c in custs:
-            key = f"R6-{c.customer_id}-{field}"
+            key = f"R6-{c.customer_id}-{field_name}"
             if key in flagged:
                 continue
             flagged.add(key)
@@ -615,7 +615,7 @@ async def r6_synthetic_identity(session: AsyncSession) -> list[DetectionHit]:
                 entity_id=c.customer_id,
                 customer_id=c.customer_id,
                 factors=[{
-                    "factor": f"{field} shared with {len(others)} other customer(s): {', '.join(others[:3])}",
+                    "factor": f"{field_name} shared with {len(others)} other customer(s): {', '.join(others[:3])}",
                     "points": points,
                     "evidence_id": c.customer_id,
                 }],

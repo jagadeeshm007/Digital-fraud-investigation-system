@@ -3,16 +3,16 @@ import socket
 import ssl
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.config import settings
+
 
 def _ssl_ctx() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return ctx
-
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.config import settings
 
 
 def _build_url(raw: str) -> tuple[str, dict]:
