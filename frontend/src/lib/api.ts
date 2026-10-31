@@ -10,6 +10,20 @@ export const SOURCE_TYPES = [
 ] as const
 export type SourceType = (typeof SOURCE_TYPES)[number]['value']
 
+// Upload templates served by GET /api/demo/{name} (app/demo_data/*.csv); the logins file is named login_events.
+const TEMPLATE_NAMES: Record<SourceType, string> = {
+  customers_accounts: 'customers_accounts',
+  transactions: 'transactions',
+  devices_logins: 'login_events',
+  loan_applications: 'loan_applications',
+  insurance_claims: 'insurance_claims',
+}
+
+/** CSV with the expected columns and a few synthetic example rows (readable, since none of it is real PII). */
+export function templateUrl(source: SourceType): string {
+  return `/api/demo/${TEMPLATE_NAMES[source]}?masked=false`
+}
+
 export interface IngestionBatch {
   batch_id: string
   source_type: SourceType

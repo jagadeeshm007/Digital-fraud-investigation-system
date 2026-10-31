@@ -1,4 +1,4 @@
-import { CircleAlertIcon, DatabaseIcon, FileUpIcon } from 'lucide-react'
+import { CircleAlertIcon, DatabaseIcon, DownloadIcon, FileUpIcon } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import PageHeader from '@/components/PageHeader'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -17,6 +17,7 @@ import {
   getRejected,
   ingestFile,
   loadSampleData,
+  templateUrl,
   SOURCE_TYPES,
   type IngestionBatch,
   type RejectedRecord,
@@ -156,6 +157,23 @@ export default function UploadPage() {
               {busy ? 'Validating…' : 'Validate'}
             </Button>
           </form>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-sm">
+            <p className="text-muted-foreground">
+              Need the format? Download a template for{' '}
+              <span className="font-medium text-foreground">
+                {SOURCE_TYPES.find((src) => src.value === sourceType)?.label}
+              </span>
+              , replace the example rows with your data, then upload it.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              render={<a href={templateUrl(sourceType)} download={`${sourceType}_template.csv`} />}
+            >
+              <DownloadIcon />
+              Download template
+            </Button>
+          </div>
         </CardPanel>
       </Card>
 

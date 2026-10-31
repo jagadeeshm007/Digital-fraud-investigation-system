@@ -89,7 +89,7 @@ npm run dev                          # console on :5173, proxies /api to :8000 (
 
 On **Data Upload**, press **Load sample data** (or `POST /api/ingest/sample`). It loads a synthetic Indian retail bank for all five sources: 150 ordinary customers plus planted fraud stories and legitimate lookalikes (`app/sample_data.py`, no real PII). Then, as an Investigator, press **Run detection** on Alerts.
 
-To demo uploads with files instead, `python -m app.sample_data sample_data/` writes the same data as CSV, XLSX and JSON, plus `99_broken_transactions.csv` for the validation report.
+To upload your own data, pick a source on Data Upload and press **Download template**: a CSV with the expected columns and a few synthetic example rows (`app/demo_data/`, served by `GET /api/demo/{source}`). Replace the rows and upload it. To demo uploads with files instead, `python -m app.sample_data sample_data/` writes the same data as CSV, XLSX and JSON, plus `99_broken_transactions.csv` for the validation report.
 
 | Customer | Planted story | Expected |
 |---|---|---|
