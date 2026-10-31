@@ -1,0 +1,9 @@
+transaction_id,timestamp,sender_account_id,beneficiary_account_id,beneficiary_name,amount_inr,channel,status,device_id,note
+T001,2024-01-01T10:00:00+05:30,ACC001,ACC002,Bob Singh,1000.00,online,completed,DEV001,
+T002,2024-01-02T10:00:00+05:30,ACC001,ACC002,Bob Singh,1200.00,online,completed,DEV001,
+T003,2024-01-03T10:00:00+05:30,ACC001,ACC002,Bob Singh,900.00,online,completed,DEV001,
+T004,2024-01-10T10:00:00+05:30,ACC001,ACC099,Unknown Payee,80000.00,online,completed,DEV001,suspicious large transfer
+T005,2024-01-15T10:00:00+05:30,ACC002,ACC003,Priya Patel,5000.00,mobile,completed,DEV004,normal
+T006,2024-01-20T10:00:00+05:30,ACC003,ACC001,Alice Kumar,3000.00,branch,completed,,branch transfer
+T007,2024-01-25T10:00:00+05:30,ACC004,ACC099,Unknown Payee,150000.00,online,completed,DEV005,very large transfer
+T008,2024-02-01T10:00:00+05:30,ACC004,ACC099,Unknown Payee,200000.00,online,completed,DEV005,follow-up transfer

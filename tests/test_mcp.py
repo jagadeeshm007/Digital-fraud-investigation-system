@@ -1,4 +1,5 @@
 """MCP gateway: reads are masked and role-checked; writes need the user's consent (FR11)."""
+import pytest
 import json
 from types import SimpleNamespace
 
@@ -8,6 +9,13 @@ from app import mcp_server as m
 from app.db import async_session
 from app.models import Case, ConsentRequest
 from tests.conftest import as_role
+
+
+@pytest.fixture
+async def client(fresh_client):
+    # These tests need an empty database each time; the shared session client is for test_e2e.
+    yield fresh_client
+
 
 
 class FakeCtx:

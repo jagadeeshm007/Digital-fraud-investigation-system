@@ -60,6 +60,179 @@ export function ingestFile(file: File, sourceType: SourceType): Promise<Ingestio
   return apiFetch<IngestionBatch>('/ingest', { method: 'POST', body: form })
 }
 
+export type RiskBand = 'High' | 'Medium' | 'Low'
+
+export interface AlertFactor {
+  factor: string
+  points: number
+  evidence_id?: string
+}
+
+export interface Alert {
+  alert_id: string
+  rule_id: string
+  fraud_category: string
+  entity_type: string
+  entity_id: string
+  customer_id: string | null
+  product: string | null
+  detected_at: string
+  base_score: number
+  ai_adjustment: number
+  final_score: number
+  risk_band: RiskBand
+  factors: AlertFactor[]
+  ai_recommendation: string | null
+  ai_status: string
+  status: string
+  cleared_reason: string | null
+}
+
+export interface Paged<T> {
+  items: T[]
+  page: number
+  page_size: number
+  total: number
+}
+
+export function getAlerts(params: Record<string, string | number | undefined>): Promise<Paged<Alert>> {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') qs.set(k, String(v))
+  return apiFetch<Paged<Alert>>(`/alerts?${qs}`)
+}
+
+export function getAlert(alertId: string): Promise<Alert> {
+  return apiFetch<Alert>(`/alerts/${encodeURIComponent(alertId)}`)
+}
+
+export function runDetection(): Promise<{
+  new_alerts: number
+  new_cases: number
+  cleared_count: number
+  total_hits: number
+}> {
+  return apiFetch('/detection/run', { method: 'POST' })
+}
+
+// Entity graph from app/api/graph.py (React Flow-ready nodes and edges, PII masked server-side).
+export type GraphNodeType =
+  | 'customer'
+  | 'account'
+  | 'transaction'
+  | 'device'
+  | 'login_event'
+  | 'ip_address'
+  | 'beneficiary_change'
+  | 'loan_application'
+  | 'insurance_claim'
+  | 'alert'
+
+export interface GraphNode {
+  id: string
+  type: GraphNodeType
+  data: { label: string; [key: string]: unknown }
+}
+
+export interface GraphEdge {
+  id: string
+  source: string
+  target: string
+  label: string
+}
+
+export interface EntityGraphData {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
+export function getGraph(kind: 'alert' | 'entity', id: string, depth = 2): Promise<EntityGraphData> {
+  return apiFetch<EntityGraphData>(`/graph/${kind}/${encodeURIComponent(id)}?depth=${depth}`)
+}
+
+// Cases (app/api/detection.py)
+export type CaseDecision = 'requires_investigation' | 'false_positive' | 'escalate'
+
+export interface Case {
+  case_id: string
+  alert_id: string
+  customer_id: string | null
+  fraud_category: string
+  risk_level: RiskBand
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CaseHistory {
+  history_id: string
+  changed_at: string
+  changed_by: string
+  from_status: string | null
+  to_status: string
+  decision: string | null
+  reason: string | null
+}
+
+export function getCases(params: Record<string, string | number | undefined>): Promise<Paged<Case>> {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') qs.set(k, String(v))
+  return apiFetch<Paged<Case>>(`/cases?${qs}`)
+}
+
+export function getCase(caseId: string): Promise<Case & { history: CaseHistory[] }> {
+  return apiFetch(`/cases/${encodeURIComponent(caseId)}`)
+}
+
+export function recordDecision(caseId: string, decision: CaseDecision, reason: string): Promise<Case> {
+  return apiFetch<Case>(`/cases/${encodeURIComponent(caseId)}/decision`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision, reason }),
+  })
+}
+
+export interface DetectionSummary {
+  total_alerts: number
+  open_alerts: number
+  cleared_alerts: number
+  risk_distribution: Record<RiskBand, number>
+  fraud_categories: Record<string, number>
+  case_statuses: Record<string, number>
+  open_cases: number
+}
+
+export function getSummary(): Promise<DetectionSummary> {
+  return apiFetch<DetectionSummary>('/detection/summary')
+}
+
+// AI review (app/api/ai_review.py)
+export interface AiReviewResult {
+  alert_id: string
+  base_score: number
+  ai_adjustment: number
+  final_score: number
+  risk_band: RiskBand
+  recommended_decision: string | null
+  reasoning: string | null
+  cited_evidence: string[] | null
+  ai_available: boolean
+  model_used?: string | null
+  ai_status: string
+}
+
+export function reviewAlert(alertId: string): Promise<AiReviewResult> {
+  return apiFetch<AiReviewResult>(`/ai/review/${encodeURIComponent(alertId)}`, { method: 'POST' })
+}
+
+export function reviewPending(limit = 20): Promise<{ reviewed: number; completed: number; unavailable: number }> {
+  return apiFetch(`/ai/review/run?limit=${limit}`, { method: 'POST' })
+}
+
+export const can = {
+  runDetection: (role: string) => role !== 'analyst',
+  decide: (role: string) => role !== 'analyst',
+}
+
 export interface AuditEntry {
   audit_id: string
   timestamp: string

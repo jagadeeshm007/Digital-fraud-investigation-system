@@ -1,10 +1,18 @@
 """Acceptance tests: every planted fraud scenario is flagged, every lookalike is cleared (team practice)."""
+import pytest
 from sqlalchemy import select
 
 from app.db import async_session
 from app.models import AiCallLog, Alert, Case
 from app.sample_data import EXPECTED_CLEARED, EXPECTED_FLAGS, NEVER_FLAGGED
 from tests.conftest import as_role
+
+
+@pytest.fixture
+async def client(fresh_client):
+    # These tests need an empty database each time; the shared session client is for test_e2e.
+    yield fresh_client
+
 
 PLANTED_PREFIX = "C9"  # planted customers are C9xxx; everyone else is ordinary noise
 

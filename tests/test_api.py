@@ -1,8 +1,16 @@
 """API behaviour the judges and hidden tests can observe: ingestion, filters, evidence, cases, roles, masking."""
+import pytest
 import json
 
 from app.sample_data import broken_transactions
 from tests.conftest import as_role
+
+
+@pytest.fixture
+async def client(fresh_client):
+    # These tests need an empty database each time; the shared session client is for test_e2e.
+    yield fresh_client
+
 
 
 def _upload(client, rows, source, name=None, role="analyst"):

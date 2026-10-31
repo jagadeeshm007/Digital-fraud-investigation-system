@@ -16,6 +16,10 @@ def _ssl_ctx() -> ssl.SSLContext:
 
 
 def _build_url(raw: str) -> tuple[str, dict]:
+    # SQLite (used in tests) — skip all Postgres-specific rewriting
+    if raw.startswith("sqlite"):
+        return raw, {}
+
     # Normalise driver prefix
     url = raw
     for prefix in ("postgresql://", "postgres://", "postgresql+psycopg://", "postgresql+psycopg2://"):
