@@ -47,6 +47,10 @@ async def apply_review(alert: Alert, session: AsyncSession) -> dict:
         outcome="fake" if model == "fake" else alert.ai_status,
         prompt_masked=result["prompt"],
     ))
+    # The AI may move an alert's score, so its case's risk and priority are recomputed.
+    # It never adds or removes links: grouping comes from matching identifiers only.
+    from app.cases import refresh_cases_for_alerts
+    await refresh_cases_for_alerts(session, [alert.alert_id])
     await session.commit()
     return result
 

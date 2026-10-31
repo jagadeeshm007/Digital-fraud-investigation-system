@@ -39,3 +39,5 @@ ignore = ["E501"]
 
 [tool.coverage.run]
 source = ["app"]
+# SQLAlchemy async runs DB calls in greenlets; without this, lines after an await go unmeasured.
+concurrency = ["greenlet", "thread"]

@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -111,6 +111,7 @@ class AuditEntry(Base):
     action: Mapped[str] = mapped_column(String)
     target: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     result: Mapped[str] = mapped_column(String)
+    user_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 class IngestionBatch(Base):
@@ -185,6 +186,58 @@ class Case(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    # Level 2: a case is an investigation over many alerts (case_alerts); alert_id stays the primary.
+    risk_original: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    risk_reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    risk_changed_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    priority_score: Mapped[int] = mapped_column(Integer, default=0)
+    priority_parts: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    conclusion: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    split_from: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+
+class CaseAlert(Base):
+    """Which alerts an investigation holds, and the matching identifiers that grouped them."""
+    __tablename__ = "case_alerts"
+    case_id: Mapped[str] = mapped_column(String, ForeignKey("cases.case_id"), primary_key=True)
+    alert_id: Mapped[str] = mapped_column(String, ForeignKey("alerts.alert_id"), primary_key=True)
+    link_reason: Mapped[str] = mapped_column(String)
+    # [{"with_alert": id, "type": "device", "value": "DEV-77"}]; PII values are masked tokens
+    links: Mapped[list] = mapped_column(JSON, default=list)
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class CaseNote(Base):
+    __tablename__ = "case_notes"
+    note_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    case_id: Mapped[str] = mapped_column(String, ForeignKey("cases.case_id"))
+    author_user: Mapped[str] = mapped_column(String)
+    author_role: Mapped[str] = mapped_column(String)
+    body: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class Recommendation(Base):
+    """A hold or verification is only ever recommended; "approved" records the authorisation, nothing more."""
+    __tablename__ = "recommendations"
+    recommendation_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    case_id: Mapped[str] = mapped_column(String, ForeignKey("cases.case_id"))
+    kind: Mapped[str] = mapped_column(String)  # hold | verification
+    reason: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending | approved | rejected
+    maker_user: Mapped[str] = mapped_column(String)
+    maker_role: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    decided_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 class CaseHistory(Base):
@@ -199,6 +252,7 @@ class CaseHistory(Base):
     to_status: Mapped[str] = mapped_column(String)
     decision: Mapped[str] = mapped_column(String)
     reason: Mapped[str] = mapped_column(String)
+    user_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 class AiCallLog(Base):

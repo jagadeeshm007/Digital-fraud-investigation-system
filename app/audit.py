@@ -13,6 +13,7 @@ async def write_audit(
     action: str,
     target: str | None,
     result: str,
+    user: str | None = None,
 ) -> None:
     session.add(AuditEntry(
         audit_id=str(uuid.uuid4()),
@@ -22,4 +23,5 @@ async def write_audit(
         action=action,
         target=target,
         result=result,
+        user_id=user,
     ))

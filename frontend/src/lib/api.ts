@@ -1,4 +1,4 @@
-import { getRole } from './role'
+import { getRole, getUser } from './role'
 
 // Contracts from construction/u1-platform/functional-design/functional-spec.md (Flows 1 and 2).
 export const SOURCE_TYPES = [
@@ -51,10 +51,11 @@ export class ApiError extends Error {
   }
 }
 
-/** fetch wrapper: injects the active role as X-Role and turns `{ error, detail }` bodies into ApiError. */
+/** fetch wrapper: injects the active role and user as X-Role / X-User and turns `{ error, detail }` bodies into ApiError. */
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('X-Role', getRole())
+  headers.set('X-User', getUser())
   const res = await fetch(`/api${path}`, { ...init, headers })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
@@ -149,6 +150,8 @@ export type GraphNodeType =
   | 'loan_application'
   | 'insurance_claim'
   | 'alert'
+  | 'phone'
+  | 'policy'
 
 export interface GraphNode {
   id: string
@@ -172,8 +175,48 @@ export function getGraph(kind: 'alert' | 'entity', id: string, depth = 2): Promi
   return apiFetch<EntityGraphData>(`/graph/${kind}/${encodeURIComponent(id)}?depth=${depth}`)
 }
 
-// Cases (app/api/detection.py)
-export type CaseDecision = 'requires_investigation' | 'false_positive' | 'escalate'
+// Case network (GET /api/graph/case/{id}): alerts and the identifiers in their evidence.
+// Every edge names the matching identifier and the records it was read from; none come from the AI.
+export interface CaseGraphEdge extends GraphEdge {
+  match: { type: string; value: string }
+  evidence: string[]
+  shared: boolean
+  origin: 'identifier'
+}
+
+export interface CaseGraphData {
+  case_id: string
+  nodes: GraphNode[]
+  edges: CaseGraphEdge[]
+}
+
+export function getCaseGraph(caseId: string): Promise<CaseGraphData> {
+  return apiFetch<CaseGraphData>(`/graph/case/${encodeURIComponent(caseId)}`)
+}
+
+export interface EntityLinks {
+  entity_id: string
+  link_count: number
+  links: {
+    shared_type: string
+    shared_value: string
+    linked_entities: { id: string; entity_type: string; customer_id: string | null }[]
+  }[]
+}
+
+export function getLinks(entityId: string): Promise<EntityLinks> {
+  return apiFetch<EntityLinks>(`/links/${encodeURIComponent(entityId)}`)
+}
+
+// Cases (app/api/detection.py, app/api/cases.py). A case is an investigation over many alerts.
+export type CaseDecision =
+  | 'requires_investigation'
+  | 'false_positive'
+  | 'escalate'
+  | 'request_info'
+  | 'recommend_hold'
+  | 'recommend_verification'
+  | 'conclude'
 
 export interface Case {
   case_id: string
@@ -181,7 +224,15 @@ export interface Case {
   customer_id: string | null
   fraud_category: string
   risk_level: RiskBand
+  risk_original: RiskBand | null
+  risk_reason: string | null
+  risk_changed_by: string | null
   status: string
+  priority_score: number
+  needs_review: boolean
+  conclusion: string | null
+  split_from: string | null
+  alert_count?: number
   created_at: string
   updated_at: string
 }
@@ -190,10 +241,96 @@ export interface CaseHistory {
   history_id: string
   changed_at: string
   changed_by: string
+  user_id: string | null
   from_status: string | null
   to_status: string
   decision: string | null
   reason: string | null
+}
+
+export interface CaseLink {
+  with_alert: string
+  with_rule: string
+  type: string
+  value: string
+}
+
+export interface CaseAlert extends Alert {
+  link_reason: string
+  links: CaseLink[]
+  linked_at: string
+}
+
+export interface EvidenceRecord {
+  id: string
+  type: string
+  record: Record<string, unknown>
+  alert_ids: string[]
+}
+
+export interface TimelineItem {
+  at: string | null
+  kind: 'evidence' | 'alert'
+  type: string
+  id: string
+  summary: string
+  alert_ids: string[]
+}
+
+export interface CaseNote {
+  note_id: string
+  author_user: string
+  author_role: string
+  body: string
+  created_at: string
+}
+
+export interface Recommendation {
+  recommendation_id: string
+  case_id: string
+  kind: 'hold' | 'verification'
+  reason: string
+  status: 'pending' | 'approved' | 'rejected'
+  maker_user: string
+  maker_role: string
+  created_at: string
+  decided_by: string | null
+  decided_at: string | null
+  decision_reason: string | null
+  effect: string
+}
+
+export interface PriorityParts {
+  severity?: number
+  exposure?: number
+  related_events?: number
+  confidence?: number
+  exposure_inr?: string
+  alert_count?: number
+  evidence_count?: number
+  factor_count?: number
+  review_reasons?: string[]
+}
+
+export interface CaseWorkspace extends Case {
+  customer: Record<PiiField, string> | null
+  alerts: CaseAlert[]
+  evidence: EvidenceRecord[]
+  timeline: TimelineItem[]
+  entities: { type: string; values: { value: string; alert_ids: string[] }[] }[]
+  indicators: (AlertFactor & { rule_id: string; alert_id: string })[]
+  risk: {
+    risk_level: RiskBand
+    risk_original: RiskBand | null
+    risk_reason: string | null
+    risk_changed_by: string | null
+    priority_score: number
+    needs_review: boolean
+    priority_parts: PriorityParts
+  }
+  notes: CaseNote[]
+  recommendations: Recommendation[]
+  history: CaseHistory[]
 }
 
 export function getCases(params: Record<string, string | number | undefined>): Promise<Paged<Case>> {
@@ -212,10 +349,43 @@ export const PII_FIELDS = [
 ] as const
 export type PiiField = (typeof PII_FIELDS)[number]['key']
 
-export function getCase(
-  caseId: string,
-): Promise<Case & { customer: Record<PiiField, string> | null; history: CaseHistory[] }> {
+export function getCase(caseId: string): Promise<CaseWorkspace> {
   return apiFetch(`/cases/${encodeURIComponent(caseId)}`)
+}
+
+function send<T>(path: string, method: string, body: unknown): Promise<T> {
+  return apiFetch<T>(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+}
+
+export function splitCase(caseId: string, alertId: string, reason: string): Promise<{ new_case: Case }> {
+  return send(`/cases/${encodeURIComponent(caseId)}/split`, 'POST', { alert_id: alertId, reason })
+}
+
+export function addNote(caseId: string, body: string): Promise<CaseNote> {
+  return send(`/cases/${encodeURIComponent(caseId)}/notes`, 'POST', { body })
+}
+
+export function overrideRisk(caseId: string, riskLevel: RiskBand, reason: string): Promise<Case> {
+  return send(`/cases/${encodeURIComponent(caseId)}/risk`, 'PATCH', { risk_level: riskLevel, reason })
+}
+
+export function decideRecommendation(id: string, approve: boolean, reason: string): Promise<Recommendation> {
+  return send(`/recommendations/${encodeURIComponent(id)}/decision`, 'POST', { approve, reason })
+}
+
+export function openCaseFromAlert(alertId: string, reason: string): Promise<Case> {
+  return send(`/alerts/${encodeURIComponent(alertId)}/case`, 'POST', { reason })
+}
+
+/** Fetches the structured JSON report and saves it as a file (the request carries the role headers). */
+export async function downloadCaseReport(caseId: string): Promise<void> {
+  const report = await apiFetch<unknown>(`/cases/${encodeURIComponent(caseId)}/report`)
+  const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `case-${caseId.slice(0, 8)}-report.json`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 /** Supervisor only; the server audits every attempt, allowed or denied. */
@@ -228,11 +398,7 @@ export function revealPii(caseId: string, field: PiiField): Promise<{ plaintext_
 }
 
 export function recordDecision(caseId: string, decision: CaseDecision, reason: string): Promise<Case> {
-  return apiFetch<Case>(`/cases/${encodeURIComponent(caseId)}/decision`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision, reason }),
-  })
+  return send<Case>(`/cases/${encodeURIComponent(caseId)}/decision`, 'PATCH', { decision, reason })
 }
 
 export interface DetectionSummary {
@@ -243,6 +409,7 @@ export interface DetectionSummary {
   fraud_categories: Record<string, number>
   case_statuses: Record<string, number>
   open_cases: number
+  needs_review_cases?: number
 }
 
 export function getSummary(): Promise<DetectionSummary> {
@@ -276,6 +443,8 @@ export const can = {
   runDetection: (role: string) => role !== 'analyst',
   decide: (role: string) => role !== 'analyst',
   reveal: (role: string) => role === 'supervisor',
+  note: (role: string) => role !== 'analyst',
+  approve: (role: string) => role === 'supervisor',
 }
 
 export interface AuditEntry {
