@@ -1,123 +1,158 @@
 # Digital Fraud Investigation System (DFIS)
 
-**Team Ozys — Azentio Hackathon 2026**
+**Team Ozys · Azentio.ai Build Labs 2026**
 
-A multi-source fraud detection platform that ingests transaction, customer, device, and loan/insurance data, runs rule-based detection with AI-assisted review, and surfaces alerts and cases through a role-gated web console.
-
----
-
-## Scope
-
-4 fraud scenarios: identity fraud, device takeover, account takeover (ATO), cross-system fraud (lending + insurance).
-
-Level 1 deliverable: ingest CSV/XLSX/JSON → validate → explainable alerts.
+DFIS links customer profiles, accounts, transactions, device and login logs, loan applications and insurance claims into one model. It scores suspicious patterns with a breakdown of every point, clears legitimate lookalikes with a stated reason, adds a bounded AI second opinion, and gives analysts a role-gated console where personal data stays masked and every action is audited.
 
 ---
 
-## Stack
+## Level 1 coverage
 
-| Layer | Technology |
+| Requirement | How DFIS does it | Where |
+|---|---|---|
+| Ingest CSV, Excel, JSON into one model | 5 sources (`customers_accounts`, `transactions`, `devices_logins`, `loan_applications`, `insurance_claims`) linked by customer, account, device and application IDs | Data Upload (or **Load sample data**) |
+| Validate, never drop silently | Every row is accepted or rejected with row number, field and reason (missing value, bad type, enum, duplicate, unknown customer, timestamp without timezone); a missing column rejects the file | Data Upload → Rejected records |
+| Suspicious transfers | `R1-SUSPICIOUS-TRANSFER` (amount vs customer average, new or recently added payee), `R1-RAPID-TRANSFER` (3+ in 10 min) | Alerts |
+| Shared devices | `R2-SHARED-DEVICE`, `R2-SHARED-IP` | Alerts, entity graph |
+| Repeated login failures | `R3-LOGIN-FAILURES` (3+ in 30 min), `R3-ATO` (failures, success on a new device, large transfer or payee change within 30 min) | Alerts |
+| Legitimate lookalikes | `R1-LOOKALIKE` (regular payee), `R2-HOUSEHOLD` (same surname and address) are stored as cleared with the reason | Alerts → status "Cleared lookalikes" |
+| Extra scenarios | `R4-LOAN-RING` (shared device, phone or address across applicants), `R5-DUP-CLAIM` / `R5-CROSS-CLAIM`, `R6-SYNTHETIC-IDENTITY` / `R6-NEAR-DUPLICATE` | Alerts |
+| Risk assessment | 0 to 100 from weighted factors, each with points and an evidence ID; High ≥ 70, Medium ≥ 40, Low below | Alert Detail |
+| Alert dashboard | Totals, risk distribution, categories, case statuses, top alerts; alert filters by customer, transaction, risk, status, product, category and date | Dashboard, Alerts |
+| Basic case queue | Medium and High alerts open cases; decisions (requires investigation, false positive, escalate) with history; the original alert is never changed | Cases |
+
+---
+
+## Architecture
+
+```
+ CSV / Excel / JSON
+        │  POST /api/ingest          (role checked, audited)
+        ▼
+ Ingestion ── validate each row ──► rejected_records (row, field, reason, raw values)
+        │
+        ▼
+ Postgres: customers, accounts, transactions, devices, login_events,
+           loan_applications, insurance_claims
+        │  POST /api/detection/run
+        ▼
+ Detection rules R1 to R6 ──► score = sum of factors (each with an evidence ID)
+        │                       ├─ lookalike → alert stored as "cleared" with reason
+        │                       └─ alert Low / Medium / High → case if Medium or High
+        ▼
+ AI review (Groq, masked evidence, citations checked, adjustment clamped to ±10)
+        │
+        ▼
+ Cases ── decision + history ──► audit_entries (role, channel, action, target, result)
+        │
+        ▼
+ Console (React + coss ui): roles, masked data, React Flow entity graph
+```
+
+| Path | Responsibility |
 |---|---|
-| Backend | FastAPI (Python 3.11) |
-| Database | Supabase Postgres |
-| Frontend | Vite + React + coss ui + React Flow |
-| AI review | OpenRouter (hard $10 cap) |
-| Detection | NetworkX + rule engine |
+| `app/main.py` | FastAPI app, exception handlers, serves the built console (with SPA fallback) |
+| `app/ingestion.py` | Parse, map, validate and write each source |
+| `app/detection/` | Rules (`rules.py`) and scoring, alerts and cases (`engine.py`) |
+| `app/graph/builder.py` | Entity graph for alerts and entities (React Flow-ready nodes and edges) |
+| `app/ai/review.py` | AI review: prompt, model chain, citation guard, ±10 clamp, fake model |
+| `app/masking.py`, `app/permissions.py`, `app/audit.py` | PII masking, role matrix, audit log |
+| `frontend/src/` | Console: pages, entity graph, API client, role switcher |
+
+Design documents (requirements, domain design, contracts, mockups, bolt plan) are in `aidlc/spaces/default/intents/261031-fraud-investigation-copi/`.
 
 ---
 
-## Architecture — 5 Units
+## Run it
 
-```
-u1-platform   →  u2-detection-cases  →  u3-ai-review
-                                      ↘  u4-web-console (parallel)
-                                      ↘  u5-mcp-gateway  (parallel)
-```
-
-| Unit | Scope |
-|---|---|
-| **u1-platform** | Ingest, schema, masking, auth, audit |
-| **u2-detection-cases** | 7 fraud rules, scoring, alerts, cases |
-| **u3-ai-review** | LLM review loop, citation guard, spend cap |
-| **u4-web-console** | 9-screen React UI, role switcher |
-| **u5-mcp-gateway** | MCP tools with PII consent gate |
-
----
-
-## Running locally
-
-```bash
-# 1. Copy env and fill in your Supabase URL + HMAC key
-cp .env.example .env
-
-# 2. Install deps (Python 3.11+)
-pip install -e .
-
-# 3. Start
-uvicorn app.main:app --reload
-```
-
-Tables are created automatically on first start via `Base.metadata.create_all`.
-
-API docs: http://localhost:8000/docs
-
-### Frontend (Vite+ / React)
-
-```bash
-cd frontend
-npm install
-npm run dev        # http://localhost:5173, proxies /api to http://127.0.0.1:8000 (override with VITE_API_PROXY)
-npm run build      # type check + production bundle in frontend/dist
-npx vp lint        # Oxlint
-npx vp fmt         # Oxfmt (CI runs `vp fmt --check`)
-npm test           # Vitest
-```
-
-The role switcher in the header sends the chosen role as `X-Role` on every API call and remembers it in `localStorage`.
-
-UI components come from [coss ui](https://coss.com/ui/docs) (Base UI + Tailwind), vendored in `frontend/src/components/ui` and themed with the brand tokens in `frontend/src/index.css`. Add more with `npx shadcn@latest add @coss/<component>`; that folder is excluded from `vp fmt` so it stays identical to the registry.
-
-### Full stack with Docker
+### Docker (one command)
 
 ```bash
 cp .env.example .env            # set MASKING_HMAC_KEY: openssl rand -hex 32
 docker compose up --build       # Postgres + app on http://localhost:8000
 ```
 
-The image builds the frontend into `frontend/dist` and sets `SERVE_FRONTEND=1`, so FastAPI serves the bundle at `/`. Compose points `DATABASE_URL` at the local Postgres container; a managed host provides its own `DATABASE_URL` and optional `PORT`.
+The image builds the console and serves it from FastAPI at `/`; refreshing any page works. Compose uses its own Postgres; a hosted deployment provides `DATABASE_URL` and optionally `PORT`. Set `APP_PORT` or `DB_PORT` if 8000 or 5432 is taken.
 
-### Sample data (planted fraud scenarios)
+### Local development
 
-`POST /api/ingest/sample` loads a synthetic Indian retail bank: 150 ordinary customers plus planted stories (suspicious transfer to a new payee, shared-device loan ring with rapid transfers, account takeover, duplicate and cross-customer insurance claims, synthetic identities) and legitimate lookalikes (monthly rent, a household sharing one phone, two mistyped passwords). Then `POST /api/detection/run` as an investigator.
+```bash
+cp .env.example .env                 # DATABASE_URL, MASKING_HMAC_KEY, GROQ_API_KEY (or FAKE_LLM=1)
+pip install -r requirements.txt
+uvicorn app.main:app --reload        # API on :8000, docs at /docs; tables are created on start
 
-Upload files instead: `python -m app.sample_data sample_data/` writes CSV, XLSX and JSON files plus `99_broken_transactions.csv` to demo the validation report.
+cd frontend && npm install
+npm run dev                          # console on :5173, proxies /api to :8000 (VITE_API_PROXY to change)
+```
 
-### MCP server (Claude, ChatGPT, Gemini)
+### Demo data
 
-The app serves an MCP endpoint at `/mcp` (Streamable HTTP). Add it to Claude Code:
+On **Data Upload**, press **Load sample data** (or `POST /api/ingest/sample`). It loads a synthetic Indian retail bank for all five sources: 150 ordinary customers plus planted fraud stories and legitimate lookalikes (`app/sample_data.py`, no real PII). Then, as an Investigator, press **Run detection** on Alerts.
+
+To demo uploads with files instead, `python -m app.sample_data sample_data/` writes the same data as CSV, XLSX and JSON, plus `99_broken_transactions.csv` for the validation report.
+
+| Customer | Planted story | Expected |
+|---|---|---|
+| C9000 | ₹2L to a payee added the day before, usual spend ₹4k | Suspicious transfer |
+| C9100, C9110, C9120 | Three unrelated applicants on one device, ₹3L loans each, then 3 × ₹95k out in minutes | Shared device, loan ring, rapid transfers |
+| C9300 | 5 failed logins, success on a new device, new payee, ₹1.5L out (with a prompt-injection note for the AI) | Account takeover (High) |
+| C9400 | Two identical motor claims | Duplicate claim |
+| C9410, C9420 | Same health incident date and amount | Cross-customer claim |
+| C9500, C9510 | Same ID number and phone, different names | Synthetic identity |
+| C9520, C9530 | Near-identical names, close birth dates | Near-duplicate profile |
+| C9010 | ₹50k rent to the same landlord every month | Cleared lookalike |
+| C9200, C9210 | Couple sharing one phone at the same address | Cleared household |
+| C9310 | Two mistyped passwords, then a normal login | No alert |
+
+### Tests and checks
+
+```bash
+docker run -d --name dfis-pg-test -e POSTGRES_USER=dfis -e POSTGRES_PASSWORD=dfis_ci -e POSTGRES_DB=dfis_test -p 55432:5432 postgres:16-alpine
+pytest --cov=app --cov-fail-under=80          # API, MCP, e2e and scenario tests against Postgres
+ruff check app/
+cd frontend && npx vp fmt --check && npx vp lint && npm test && npm run build
+```
+
+`tests/test_scenarios.py` is the acceptance suite: every planted scenario is flagged, every lookalike is cleared with a reason, and no ordinary customer is flagged. CI (`.github/workflows/ci.yml`) runs all of this on every push with `FAKE_LLM=1`, then builds the Docker image.
+
+### MCP server
+
+The app serves an MCP endpoint at `/mcp` (Streamable HTTP), for example in Claude Code:
 
 ```bash
 claude mcp add --transport http dfis http://localhost:8000/mcp --header "X-Role: investigator"
 ```
 
-- Read tools: `get_dashboard`, `list_alerts`, `get_alert`, `list_cases`, `get_case`, `get_ai_activity`. Responses are masked like the web API.
-- Write tools: `record_case_decision`, `run_detection`. Each asks the **user** to confirm through an MCP consent prompt first; a client that cannot show the prompt is refused. Every call and consent is in the audit trail with channel `mcp`.
+- Read tools: `get_dashboard`, `list_alerts`, `get_alert`, `list_cases`, `get_case`, `get_ai_activity`, masked like the web API.
+- Write tools: `record_case_decision`, `run_detection`. Each asks the user to confirm through an MCP consent prompt first; a client that cannot show the prompt is refused. Every call and consent is audited with channel `mcp`.
 - The role comes from the `X-Role` header and is checked on the server. There is no reveal tool, so PII never leaves through MCP.
-- For a deployed URL, set `MCP_ALLOWED_HOSTS=<your-host>`.
-- End-to-end check with a real MCP client (start the app first): `python scripts/mcp_e2e.py http://localhost:8000` (19 checks: tools, reads, consent accepted/declined/unsupported, role refusal, no raw PII, DNS-rebinding protection).
+- For a deployed URL set `MCP_ALLOWED_HOSTS=<your-host>`. End-to-end check with a real MCP client: `python scripts/mcp_e2e.py http://localhost:8000`.
 
-### Tests
+---
 
-```bash
-docker run -d --name dfis-pg-test -e POSTGRES_USER=dfis -e POSTGRES_PASSWORD=dfis_ci -e POSTGRES_DB=dfis_test -p 55432:5432 postgres:16-alpine
-pytest --cov=app --cov-fail-under=80
-```
+## API
 
-`tests/test_scenarios.py` is the acceptance suite: every planted scenario is flagged, every lookalike is cleared with a reason, and no ordinary customer is flagged.
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/ingest` | Upload a file (`file`, `source_type`) and get the batch report |
+| POST | `/api/ingest/sample` | Load the bundled synthetic data for all five sources |
+| GET | `/api/demo/{source_type}` | Preview the bundled demo data (PII masked by default) |
+| GET | `/api/ingest/{batch_id}/rejected` | Rejected rows with field and reason |
+| POST | `/api/detection/run` | Run all rules (Investigator, Supervisor) |
+| GET | `/api/detection/summary` | Dashboard figures |
+| GET | `/api/alerts` | Filters: `customer_id`, `transaction_id`, `risk_band`, `fraud_category`, `product`, `status`, `date_from`, `date_to`; paged |
+| GET | `/api/alerts/{alert_id}` | Alert with factors, scores and AI status |
+| GET | `/api/graph/alert/{alert_id}`, `/api/graph/entity/{id}` | Entity graph (nodes and edges, PII masked) |
+| GET | `/api/links/{entity_id}` | Entities sharing a device, IP, phone, email or payee |
+| GET | `/api/cases`, `/api/cases/{case_id}` | Case queue and case with history |
+| PATCH | `/api/cases/{case_id}/decision` | `requires_investigation`, `false_positive` or `escalate`, with a reason |
+| POST | `/api/ai/review/run`, `/api/ai/review/{alert_id}` | AI review for pending alerts or one alert |
+| POST | `/api/masking/reveal` | Supervisor-only reveal of one field, audited |
+| GET | `/api/audit` | Audit trail, paged |
+| GET | `/healthz` | Liveness check |
+| MCP | `/mcp` | MCP tools over Streamable HTTP (see MCP server), masked and audited |
 
-### CI
-
-`.github/workflows/ci.yml` runs on every push: Ruff + pytest (with a Postgres service, `FAKE_LLM=1`, coverage floor 80% once `tests/` exists), Vite+ format check, lint, Vitest and build, then a Docker image build.
+Errors use `{"error": "<code>", "detail": "<message>"}`; permission failures return 403 and are audited.
 
 ---
 
@@ -125,36 +160,50 @@ pytest --cov=app --cov-fail-under=80
 
 | Role | Can do |
 |---|---|
-| `analyst` | Upload files, view alerts/cases/audit |
-| `investigator` | + run detection, record case decisions, escalate |
-| `supervisor` | + change rules, reveal PII fields |
+| Analyst | Upload, view alerts, cases, audit and AI activity |
+| Investigator | + run detection, record case decisions, escalate |
+| Supervisor | + change rules, reveal PII |
 
-Pass role via `X-Role` header. Defaults to `analyst` if absent.
-
----
-
-## Key rules
-
-- All PII masked (HMAC-SHA256 stable token) on every outbound path
-- Supervisor reveal via `POST /api/masking/reveal` (app only, never MCP)
-- Money as `Decimal(14,2)` — no floats
-- Secrets from env vars only — never committed
+The role comes from the `X-Role` header (the console's role switcher sets it); unknown or missing means Analyst. Checks run on the server.
 
 ---
 
-## Bolt delivery sequence
+## AI review
 
-| Bolt | Scope | Status |
-|---|---|---|
-| B1 b1-platform | FastAPI skeleton, schema, ingest, masking, auth | 🔨 in progress |
-| B2 b2-detection-cases | 7 rules, scoring, alerts, cases, dashboard | ⏳ |
-| B3 b3-ai-review | LLM loop, $10 cap, citation guard | ⏳ |
-| B4 b4-web-console | React UI (parallel with B5) | ⏳ |
-| B5 b5-mcp-gateway | MCP tools + consent gate (parallel with B4) | ⏳ |
+- **Models:** Groq `llama-3.3-70b-versatile`, falling back to `llama-3.1-8b-instant` on rate limits.
+- **Prompt:** `_SYSTEM_PROMPT` and `_build_prompt` in `app/ai/review.py`. The model receives masked evidence only and must answer in a fixed JSON shape.
+- **Guards:** the adjustment is clamped to ±10; reasoning must cite evidence IDs that exist in the alert; any failure, timeout or invalid answer leaves the rule-based score in place.
+- **Offline:** `FAKE_LLM=1` returns a deterministic stub (used in CI and demos without a key).
+
+---
+
+## Security and data
+
+- PII (name, phone, email, address, ID number, IP) is HMAC-masked on every API response, graph and AI call; the same value always gives the same token, so links still work.
+- Secrets come from environment variables only. All demo data is synthetic.
+- Parameterised SQL through SQLAlchemy; money stored as `Numeric(14,2)`; timestamps must carry a timezone.
+
+---
+
+## Tools and components used
+
+- Backend: FastAPI, SQLAlchemy (async) with asyncpg, pandas, openpyxl, pydantic-settings, Groq SDK.
+- Frontend: React 19, TypeScript, Vite+ (Vite, Oxlint, Oxfmt, Vitest), Tailwind CSS v4, coss ui (Base UI), React Flow (`@xyflow/react`), d3-force, React Router, lucide-react.
+- Delivery: Docker, docker-compose, GitHub Actions, Supabase Postgres.
+- AI tools used during development: _to be filled in by the team (required by hackathon rule 6)._
+
+---
+
+## Known limits
+
+- Roles come from a header for the demo; there is no login.
+- `/api/graph/*` has no node cap; a very busy device can return a large graph.
+- Beneficiary changes have no upload source yet, so the takeover's payee-change factor is not exercised by uploads.
+- Automated tests cover the API, MCP and scenarios; the console has no component tests yet.
 
 ---
 
 ## Team
 
-- Jagadeesh — backend (FastAPI, detection engine, AI review)
-- Teammate — infra + frontend (Docker, CI, React UI)
+- **Jagadeesh:** backend platform, detection rules, scoring, AI review, entity graph API, MCP server, sample data, test suite.
+- **Vijay Lingoju:** Docker, CI, React console, role switcher, all console screens, React Flow graph, ingestion fixes.
