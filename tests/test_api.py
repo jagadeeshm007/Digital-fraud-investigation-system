@@ -27,6 +27,26 @@ async def _seed(client):
     assert (await client.post("/api/detection/run", headers=as_role("investigator"))).status_code == 200
 
 
+async def test_csv_empty_cell_is_rejected_and_channel_case_is_ignored(client):
+    await client.post("/api/ingest/sample", headers=as_role("analyst"))
+    csv = (
+        "transaction_id,timestamp,sender_account_id,amount_inr,channel,status\n"
+        "CSV-1,2026-10-31T09:00:00+05:30,ACC-X1,2400.00,UPI,success\n"
+        "CSV-2,2026-10-31T09:05:00+05:30,ACC-X2,,upi,success\n"
+    ).encode()
+    r = await client.post(
+        "/api/ingest",
+        files={"file": ("cells.csv", csv, "text/csv")},
+        data={"source_type": "transactions"},
+        headers=as_role("analyst"),
+    )
+    assert r.status_code == 200  # an empty CSV cell used to become NaN and fail the insert with a 500
+    body = r.json()
+    assert body["accepted_count"] == 1 and body["rejected_count"] == 1
+    rej = (await client.get(f"/api/ingest/{body['batch_id']}/rejected", headers=as_role("analyst"))).json()
+    assert [(x["row_number"], x["field"]) for x in rej["records"]] == [(2, "amount_inr")]
+
+
 async def test_health(client):
     assert (await client.get("/healthz")).json() == {"status": "ok"}
 

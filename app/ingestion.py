@@ -89,7 +89,7 @@ def _datetime_tz(value: Any, field: str) -> datetime:
 
 
 def _enum(value: Any, allowed: set[str], field: str) -> str:
-    v = str(value).strip()
+    v = str(value).strip().lower()  # allowed values are lowercase; "UPI" and "upi" are the same channel
     if v not in allowed:
         raise IngestionError("validation_error", f"{field}: expected one of {sorted(allowed)}, got '{v}'", field)
     return v
@@ -108,16 +108,21 @@ def _str(row: dict, key: str) -> str | None:
 
 # ── File parsing ──────────────────────────────────────────────────────────────
 
+def _records(df: pd.DataFrame) -> list[dict]:
+    # pandas' string dtype keeps empty cells as NaN even after where(); JSON and Postgres reject NaN.
+    return [{k: (None if pd.isna(v) else v) for k, v in rec.items()} for rec in df.to_dict(orient="records")]
+
+
 def _parse_file(file_bytes: bytes, filename: str) -> tuple[str, list[dict]]:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
     def _csv():
         df = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8-sig", dtype=str)
-        return "csv", df.where(df.notna(), None).to_dict(orient="records")
+        return "csv", _records(df)
 
     def _xlsx():
         df = pd.read_excel(io.BytesIO(file_bytes), dtype=str)
-        return "xlsx", df.where(df.notna(), None).to_dict(orient="records")
+        return "xlsx", _records(df)
 
     def _json():
         data = json.loads(file_bytes.decode("utf-8"))
