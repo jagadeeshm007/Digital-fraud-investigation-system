@@ -146,3 +146,56 @@ class RevealEvent(Base):
     revealed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+
+class Alert(Base):
+    __tablename__ = "alerts"
+    alert_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    rule_id: Mapped[str] = mapped_column(String)
+    fraud_category: Mapped[str] = mapped_column(String)
+    entity_type: Mapped[str] = mapped_column(String)
+    entity_id: Mapped[str] = mapped_column(String)
+    customer_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    product: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    base_score: Mapped[int] = mapped_column(Integer)
+    ai_adjustment: Mapped[int] = mapped_column(Integer, default=0)
+    final_score: Mapped[int] = mapped_column(Integer)
+    risk_band: Mapped[str] = mapped_column(String)
+    factors: Mapped[dict] = mapped_column(JSON)
+    ai_recommendation: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    ai_status: Mapped[str] = mapped_column(String, default="pending")
+    status: Mapped[str] = mapped_column(String, default="open")
+    cleared_reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+
+class Case(Base):
+    __tablename__ = "cases"
+    case_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    alert_id: Mapped[str] = mapped_column(String, ForeignKey("alerts.alert_id"))
+    customer_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    fraud_category: Mapped[str] = mapped_column(String)
+    risk_level: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="new")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class CaseHistory(Base):
+    __tablename__ = "case_history"
+    history_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    case_id: Mapped[str] = mapped_column(String, ForeignKey("cases.case_id"))
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    changed_by: Mapped[str] = mapped_column(String)
+    from_status: Mapped[str] = mapped_column(String)
+    to_status: Mapped[str] = mapped_column(String)
+    decision: Mapped[str] = mapped_column(String)
+    reason: Mapped[str] = mapped_column(String)
