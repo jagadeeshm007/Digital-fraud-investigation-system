@@ -1,0 +1,38 @@
+# Local stack: Postgres + the app image (API + built frontend on http://localhost:8000).
+#   cp .env.example .env   # set MASKING_HMAC_KEY (openssl rand -hex 32)
+#   docker compose up --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dfis}
+      # Local development default only; production uses the managed host's DATABASE_URL.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dfis_local}
+      POSTGRES_DB: ${POSTGRES_DB:-dfis}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dfis}:${POSTGRES_PASSWORD:-dfis_local}@db:5432/${POSTGRES_DB:-dfis}
+      MASKING_HMAC_KEY: ${MASKING_HMAC_KEY:?Set MASKING_HMAC_KEY in .env (openssl rand -hex 32)}
+      SERVE_FRONTEND: "1"
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-50}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      FAKE_LLM: ${FAKE_LLM:-1}
+    ports:
+      - "${APP_PORT:-8000}:8000"
+
+volumes:
+  pgdata:

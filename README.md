@@ -61,6 +61,35 @@ Tables are created automatically on first start via `Base.metadata.create_all`.
 
 API docs: http://localhost:8000/docs
 
+### Frontend (Vite+ / React)
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173, proxies /api to http://127.0.0.1:8000 (override with VITE_API_PROXY)
+npm run build      # type check + production bundle in frontend/dist
+npx vp lint        # Oxlint
+npx vp fmt         # Oxfmt (CI runs `vp fmt --check`)
+npm test           # Vitest
+```
+
+The role switcher in the header sends the chosen role as `X-Role` on every API call and remembers it in `localStorage`.
+
+UI components come from [coss ui](https://coss.com/ui/docs) (Base UI + Tailwind), vendored in `frontend/src/components/ui` and themed with the brand tokens in `frontend/src/index.css`. Add more with `npx shadcn@latest add @coss/<component>`; that folder is excluded from `vp fmt` so it stays identical to the registry.
+
+### Full stack with Docker
+
+```bash
+cp .env.example .env            # set MASKING_HMAC_KEY: openssl rand -hex 32
+docker compose up --build       # Postgres + app on http://localhost:8000
+```
+
+The image builds the frontend into `frontend/dist` and sets `SERVE_FRONTEND=1`, so FastAPI serves the bundle at `/`. Compose points `DATABASE_URL` at the local Postgres container; a managed host provides its own `DATABASE_URL` and optional `PORT`.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push: Ruff + pytest (with a Postgres service, `FAKE_LLM=1`, coverage floor 80% once `tests/` exists), Vite+ format check, lint, Vitest and build, then a Docker image build.
+
 ---
 
 ## Roles
