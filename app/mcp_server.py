@@ -241,6 +241,8 @@ def mcp_http_app():
     hosts += [h.strip() for h in settings.mcp_allowed_hosts.split(",") if h.strip()]
     return mcp.streamable_http_app(
         streamable_http_path="/mcp",
+        # Serverless instances don't share memory, so a session made on one can't be found on the next.
+        stateless_http=settings.mcp_stateless,
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True, allowed_hosts=hosts,
             allowed_origins=[f"http://{h}" for h in hosts] + [f"https://{h}" for h in hosts],

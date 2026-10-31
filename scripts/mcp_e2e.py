@@ -3,6 +3,7 @@ End-to-end check of the MCP server against a running app, using a real MCP clien
 
     uvicorn app.main:app --port 8000          # in another terminal (FAKE_LLM=1 is fine)
     python scripts/mcp_e2e.py http://localhost:8000
+    python scripts/mcp_e2e.py https://dfis-gray.vercel.app --stateless   # serverless deployment
 
 Loads sample data, then exercises every tool as an MCP client would: reads, consent accepted,
 declined and unsupported, role refusal, PII never present, and DNS-rebinding protection.
@@ -17,7 +18,10 @@ from mcp import types
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
-BASE = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://localhost:8000"
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+BASE = ARGS[0].rstrip("/") if ARGS else "http://localhost:8000"
+# Stateless MCP (serverless) cannot round-trip a consent prompt, so every write must be refused.
+STATELESS = "--stateless" in sys.argv
 RAW_PII = ["Neelam Chawla", "10.9.3.99", "+919900000555", "SYNTH9999X"]  # planted raw values
 results: list[tuple[bool, str]] = []
 
@@ -73,7 +77,13 @@ async def main() -> int:
     accept = answer("accept")
     det = await run("investigator", lambda s: s.call_tool("run_detection", {}), accept)
     d = payload(det)
-    check(d.get("performed") is True and accept.prompts, f"run_detection after consent: {d.get('new_alerts')} alerts")
+    if STATELESS:
+        check(d.get("performed") is False, f"run_detection refused without a consent round-trip ({d.get('consent')})")
+        async with httpx.AsyncClient(base_url=BASE, timeout=120) as http:  # detect over REST instead
+            r = await http.post("/api/detection/run", headers={"X-Role": "investigator"})
+            check(r.status_code == 200, f"detection over REST: {r.json().get('new_alerts')} new alerts")
+    else:
+        check(d.get("performed") is True and accept.prompts, f"run_detection after consent: {d.get('new_alerts')} alerts")
 
     async def browse(s):
         dash = payload(await s.call_tool("get_dashboard", {}))
@@ -100,7 +110,8 @@ async def main() -> int:
     decline = answer("decline")
     out = payload(await run("investigator", lambda s: s.call_tool(
         "record_case_decision", {"case_id": case_a, "decision": "false_positive", "reason": "e2e"}), decline))
-    check(out.get("performed") is False and out.get("consent") == "declined", "declined consent changes nothing")
+    check(out.get("performed") is False and out.get("consent") in (("unsupported",) if STATELESS else ("declined",)),
+          "declined consent changes nothing")
 
     untick = answer("accept", confirm=False)
     out = payload(await run("investigator", lambda s: s.call_tool(
@@ -122,23 +133,27 @@ async def main() -> int:
     out = payload(await run("investigator", lambda s: s.call_tool(
         "record_case_decision",
         {"case_id": case_b, "decision": "requires_investigation", "reason": "Linked to loan ring (MCP e2e)"}), ok))
-    check(out.get("performed") is True and out["case"]["status"] == "under_investigation",
-          "accepted decision recorded via MCP")
-
     async with httpx.AsyncClient(base_url=BASE, timeout=60) as http:
-        case = (await http.get(f"/api/cases/{case_b}", headers={"X-Role": "analyst"})).json()
-        check(case["history"][-1]["reason"] == "Linked to loan ring (MCP e2e)", "decision visible in REST case history")
         audit = (await http.get("/api/audit?page_size=200", headers={"X-Role": "analyst"})).json()["items"]
         mcp_rows = [e for e in audit if e["channel"] == "mcp"]
-        check(any(e["action"] == "consent:record_case_decision" for e in mcp_rows)
-              and any(e["action"] == "record_case_decision" for e in mcp_rows),
-              f"audit trail has {len(mcp_rows)} MCP rows incl. consent outcomes")
+        if STATELESS:
+            check(out.get("performed") is False, "accepted-but-stateless write refused; nothing changed")
+            check(any(e["action"] == "consent:record_case_decision" and e["result"] == "unsupported" for e in mcp_rows),
+                  f"audit trail has {len(mcp_rows)} MCP rows incl. refused consents")
+        else:
+            check(out.get("performed") is True and out["case"]["status"] == "under_investigation",
+                  "accepted decision recorded via MCP")
+            case = (await http.get(f"/api/cases/{case_b}", headers={"X-Role": "analyst"})).json()
+            check(case["history"][-1]["reason"] == "Linked to loan ring (MCP e2e)", "decision visible in REST case history")
+            check(any(e["action"] == "consent:record_case_decision" for e in mcp_rows)
+                  and any(e["action"] == "record_case_decision" for e in mcp_rows),
+                  f"audit trail has {len(mcp_rows)} MCP rows incl. consent outcomes")
 
         # 5. DNS-rebinding protection: an unexpected Host header is refused
         r = await http.post("/mcp", headers={"Host": "evil.example.com", "Accept": "application/json, text/event-stream",
                                              "Content-Type": "application/json"},
                             content=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
-        check(r.status_code in (400, 403, 421), f"foreign Host header rejected ({r.status_code})")
+        check(r.status_code in (400, 403, 404, 421), f"foreign Host header rejected ({r.status_code})")  # Vercel edge answers 404
 
     failed = [w for ok, w in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} checks passed")

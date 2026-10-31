@@ -4,8 +4,6 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import api_router
 from app.config import settings
@@ -50,18 +48,8 @@ app.include_router(api_router)
 app.router.routes.extend(_mcp_app.routes)
 
 
-class SPAStaticFiles(StaticFiles):
-    """Serve index.html for unknown paths so deep links like /alerts/123 survive a refresh."""
-
-    async def get_response(self, path, scope):
-        try:
-            return await super().get_response(path, scope)
-        except StarletteHTTPException as exc:
-            if exc.status_code != 404 or path.startswith("api/"):
-                raise
-            return await super().get_response("index.html", scope)
-
-
 if settings.serve_frontend:
+    # Low-priority routes: API, /mcp and /healthz always win; unknown page paths get index.html
+    # so deep links like /alerts/123 survive a refresh. On Vercel the files go to the CDN.
     dist = Path(__file__).parent.parent / "frontend" / "dist"
-    app.mount("/", SPAStaticFiles(directory=str(dist), html=True), name="static")
+    app.frontend("/", directory=str(dist), fallback="index.html")

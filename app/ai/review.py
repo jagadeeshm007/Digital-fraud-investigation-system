@@ -1,6 +1,6 @@
 """
 B3 AI review: Groq-backed per-alert analysis with citation guard + ±10 adjustment cap.
-Model chain: llama-3.3-70b-versatile → llama-3.1-8b-instant (rate-limit fallback).
+Model chain: openai/gpt-oss-120b → openai/gpt-oss-20b (rate-limit fallback).
 Migrate to OpenRouter: swap AsyncGroq for AsyncOpenAI(base_url=...) + update model IDs.
 """
 import asyncio
@@ -16,8 +16,8 @@ log = logging.getLogger(__name__)
 
 # Production models, best → fastest.  Config GROQ_MODEL overrides index 0.
 _MODEL_CHAIN = [
-    "llama-3.3-70b-versatile",   # 131K ctx, best reasoning, ~280 tok/s
-    "llama-3.1-8b-instant",      # 131K ctx, fastest, ~560 tok/s — rate-limit fallback
+    "openai/gpt-oss-120b",   # 131K ctx, best reasoning
+    "openai/gpt-oss-20b",    # 131K ctx, faster and cheaper — rate-limit fallback
 ]
 
 _SYSTEM_PROMPT = """You are a fraud analyst reviewing flagged transaction alerts.
@@ -193,8 +193,8 @@ def _fake_review(alert: Alert) -> dict:
 
 # USD per 1M tokens (input, output) — estimate for the AI Activity spend meter (FR10.2).
 _PRICE_PER_M = {
-    "llama-3.3-70b-versatile": (0.59, 0.79),
-    "llama-3.1-8b-instant": (0.05, 0.08),
+    "openai/gpt-oss-120b": (0.15, 0.60),
+    "openai/gpt-oss-20b": (0.075, 0.30),
 }
 
 
