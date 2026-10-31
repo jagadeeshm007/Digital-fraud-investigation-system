@@ -37,6 +37,9 @@ export default function AlertsPage() {
   const [band, setBand] = useState(ALL)
   const [status, setStatus] = useState('open')
   const [customer, setCustomer] = useState('')
+  const [txn, setTxn] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [data, setData] = useState<Paged<Alert> | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
@@ -51,12 +54,15 @@ export default function AlertsPage() {
           risk_band: band === ALL ? undefined : band,
           status: status === ALL ? undefined : status,
           customer_id: customer.trim() || undefined,
+          transaction_id: txn.trim() || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         }),
       )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load alerts')
     }
-  }, [page, band, status, customer])
+  }, [page, band, status, customer, txn, dateFrom, dateTo])
 
   useEffect(() => {
     void load()
@@ -128,6 +134,38 @@ export default function AlertsPage() {
             />
             <FilterSelect label="Risk level" items={BANDS} value={band} onChange={(v) => (setBand(v), setPage(1))} />
             <FilterSelect label="Status" items={STATUSES} value={status} onChange={(v) => (setStatus(v), setPage(1))} />
+            <Input
+              aria-label="Transaction ID"
+              placeholder="Transaction ID"
+              className="w-44"
+              value={txn}
+              onChange={(e) => {
+                setTxn((e.target as HTMLInputElement).value)
+                setPage(1)
+              }}
+            />
+            <Input
+              type="date"
+              aria-label="Detected from"
+              title="Detected from"
+              className="w-40"
+              value={dateFrom}
+              onChange={(e) => {
+                setDateFrom((e.target as HTMLInputElement).value)
+                setPage(1)
+              }}
+            />
+            <Input
+              type="date"
+              aria-label="Detected to"
+              title="Detected to"
+              className="w-40"
+              value={dateTo}
+              onChange={(e) => {
+                setDateTo((e.target as HTMLInputElement).value)
+                setPage(1)
+              }}
+            />
           </div>
 
           {!data && !error ? (
