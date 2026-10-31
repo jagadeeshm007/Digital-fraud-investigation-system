@@ -21,15 +21,24 @@ SOURCE_ORDER = ["customers_accounts", "transactions", "devices_logins", "loan_ap
 
 # Ground truth: what detection must find (rule prefix -> customers) and must clear.
 EXPECTED_FLAGS = {
-    "R1-SUSPICIOUS-TRANSFER": {"C9000", "C9300"},
+    "R1-SUSPICIOUS-TRANSFER": {"C9000", "C9300", "C9600"},
     "R1-RAPID-TRANSFER": {"C9100"},
     "R2-SHARED-DEVICE": {"C9100", "C9110", "C9120"},  # any one of the ring
     "R3-ATO": {"C9300"},
-    "R4-LOAN-RING": {"C9100", "C9110", "C9120"},
+    "R4-LOAN-RING": {"C9100", "C9110", "C9120", "C9600", "C9610", "C9620"},
     "R5-DUP-CLAIM": {"C9400"},
     "R5-CROSS-CLAIM": {"C9410", "C9420"},
     "R6-SYNTHETIC-IDENTITY": {"C9500", "C9510"},
     "R6-NEAR-DUPLICATE": {"C9520", "C9530"},
+    "R3-LOGIN-FAILURES": {"C9320"},
+    "R7-CHANGED-ACCOUNT-LOAN": {"C9600"},
+}
+
+# Level 2 ground truth: alerts on these customers must land in ONE investigation.
+EXPECTED_INVESTIGATIONS = {
+    "cross_system": {"customers": {"C9600", "C9610", "C9620"},
+                     "rules": {"R4-LOAN-RING", "R7-CHANGED-ACCOUNT-LOAN", "R1-SUSPICIOUS-TRANSFER"}},
+    "ato": {"customers": {"C9300"}, "rules": {"R3-ATO", "R1-SUSPICIOUS-TRANSFER"}},
 }
 EXPECTED_CLEARED = {"R1-LOOKALIKE": {"C9010"}, "R2-HOUSEHOLD": {"C9200", "C9210"}}
 NEVER_FLAGGED = {"C9310"}  # two mistyped passwords then a normal login
@@ -200,6 +209,12 @@ def build(n_noise: int = 150, seed: int = 42) -> dict[str, list[dict]]:
     b.login("C9310", t1 + timedelta(minutes=1), "DEV-9310", "10.9.3.10", outcome="failure")
     b.login("C9310", t1 + timedelta(minutes=2), "DEV-9310", "10.9.3.10")
 
+    # ── P3b: an isolated burst of failed logins, nothing else (weak evidence on its own) ─
+    planted("C9320", "Kavya Menon", address="5 Lake Road, Bhopal", phone="+919900000321", identity="PLNT0321A")
+    t2 = START + timedelta(days=33)
+    for k in range(4):
+        b.login("C9320", t2 + timedelta(minutes=k), "DEV-9320", "10.9.3.20", outcome="failure")
+
     # ── P5: duplicate insurance claims (same customer; and across customers) ─
     planted("C9400", "Mohan Lal", address="66 Station Road, Lucknow", phone="+919900000401", identity="PLNT0401A")
     b.claim("CL9401", "C9400", incident="2026-09-10", filed="2026-09-12", ctype="motor", amount=85000)
@@ -216,6 +231,23 @@ def build(n_noise: int = 150, seed: int = 42) -> dict[str, list[dict]]:
             identity="PLNT0521A", dob="1990-01-15")
     planted("C9530", "Anil Kumar Sharmaa", address="9 Civil Lines, Nagpur", phone="+919900000531",
             identity="PLNT0531A", dob="1990-03-02")
+
+    # ── P7 (Level 2 cross-system): device ring applies for loans; one member changes their account
+    # details from the ring device, gets the loan paid into it, then sends it to a new beneficiary.
+    ring2 = [("C9600", "Tarun Bedi", "14 Mall Road, Shimla"), ("C9610", "Zoya Mirza", "3 Ghat Road, Varanasi"),
+             ("C9620", "Pradeep Rawat", "77 Station Lane, Dehradun")]
+    for i, (cid, name, addr) in enumerate(ring2):
+        a = planted(cid, name, address=addr, phone=f"+91990000060{i}", identity=f"PLNT060{i}A")
+        b.history(a, 3000)
+        b.login(cid, START + timedelta(days=43, minutes=i * 9), "DEV-RING2", f"10.9.6.{i}")
+    t3 = START + timedelta(days=44)
+    b.login("C9600", t3, "DEV-RING2", "10.9.6.0", event_type="profile_change")
+    for i, (cid, _name, addr) in enumerate(ring2):
+        b.loan(f"L96{i}0", cid, t3 + timedelta(days=1, hours=i), 400000, device="DEV-RING2",
+               phone=f"+91990000060{i}", address=addr, disburse_to="ACC" + cid[1:])
+    b.login("C9600", t3 + timedelta(days=2), "DEV-RING2", "10.9.6.0", event_type="beneficiary_add",
+            payee="ACC-MULE-21")
+    b.txn("ACC9600", t3 + timedelta(days=2, hours=1), 380000, "ACC-MULE-21")
 
     return b.rows
 

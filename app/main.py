@@ -10,6 +10,7 @@ from app.config import settings
 from app.db import engine
 from app.exceptions import IngestionError, PermissionDenied
 from app.mcp_server import mcp, mcp_http_app
+from app.migrate import add_missing_columns
 from app.models import Base
 
 logging.basicConfig(level=settings.log_level)
@@ -21,6 +22,7 @@ _mcp_app = mcp_http_app()  # builds mcp.session_manager
 async def lifespan(_app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(add_missing_columns)
     async with mcp.session_manager.run():
         yield
 

@@ -2,7 +2,8 @@
 MCP gateway (u5, FR11): lets Claude and other frontier models work with DFIS.
 
 - Read tools are free; responses are the same masked JSON the web API returns.
-- Write tools (record_case_decision, run_detection) run only after the *user* accepts an
+- Write tools (record_case_decision, run_detection, add_case_note, split_case_alert,
+  recommend_action) run only after the *user* accepts an
   MCP elicitation prompt. A client that cannot show one gets a refusal, never a silent write.
 - Role comes from the X-Role header, exactly as in the web app; every call is audited (channel "mcp").
 - There is deliberately no reveal tool: PII never leaves through MCP (project rule).
@@ -14,15 +15,17 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
 
+from app import cases as case_svc
 from app.api import ai_review as ai_api
 from app.api import detection as det_api
+from app.api import graph as graph_api
 from app.audit import write_audit
 from app.config import settings
 from app.db import async_session
 from app.detection.engine import run_detection as _run_detection
 from app.exceptions import PermissionDenied
 from app.models import ConsentRequest
-from app.permissions import check_permission, resolve_role
+from app.permissions import check_permission, resolve_role, resolve_user
 
 mcp = MCPServer(
     name="dfis",
@@ -43,12 +46,17 @@ def _role(ctx: Context) -> str:
     return resolve_role(headers.get("x-role") or headers.get("X-Role"))
 
 
+def _user(ctx: Context, role: str) -> str:
+    headers = ctx.headers or {}
+    return resolve_user(headers.get("x-user") or headers.get("X-User"), role)
+
+
 def _error(e: Exception) -> dict:
     if isinstance(e, HTTPException):
         return {"error": e.detail, "status": e.status_code}
     if isinstance(e, PermissionDenied):
         return {"error": str(e), "status": 403}
-    if isinstance(e, det_api.DecisionError):
+    if isinstance(e, (det_api.DecisionError, case_svc.CaseError)):
         return {"error": e.detail, "status": e.status}
     raise e
 
@@ -144,12 +152,13 @@ async def get_alert(ctx: Context, alert_id: str) -> dict[str, Any]:
 async def list_cases(
     ctx: Context, status: str | None = None, risk_level: str | None = None, limit: int = 20
 ) -> dict[str, Any]:
-    """List investigation cases. status: new|under_investigation|escalated|closed."""
+    """List investigation cases, highest priority first.
+    status: new|under_investigation|info_requested|escalated|closed|concluded."""
     role = _role(ctx)
     async with async_session() as session:
         try:
             out = await det_api.list_cases(
-                customer_id=None, status=status, risk_level=risk_level, page=1,
+                customer_id=None, status=status, risk_level=risk_level, needs_review=None, page=1,
                 page_size=max(1, min(limit, 100)), x_role=role, session=session,
             )
         except Exception as e:  # noqa: BLE001
@@ -184,12 +193,99 @@ async def get_ai_activity(ctx: Context, limit: int = 20) -> dict[str, Any]:
     return out
 
 
+@mcp.tool()
+async def get_case_report(ctx: Context, case_id: str) -> dict[str, Any]:
+    """Structured case report: alerts, indicators, masked evidence, AI reviews, history, notes,
+    recommendations and audit rows. Read-only."""
+    role = _role(ctx)
+    async with async_session() as session:
+        try:
+            check_permission(role, "view_cases")
+            out = await case_svc.build_report(session, await case_svc.get_case_or_404(session, case_id))
+        except Exception as e:  # noqa: BLE001
+            out = _error(e)
+    await _audit(role, "mcp:get_case_report", case_id, "ok" if "error" not in out else "denied")
+    return out
+
+
+@mcp.tool()
+async def get_case_graph(ctx: Context, case_id: str) -> dict[str, Any]:
+    """Investigation network for a case: alerts and the identifiers in their evidence. Every edge names
+    the matching identifier and the record it came from. Read-only."""
+    role = _role(ctx)
+    async with async_session() as session:
+        try:
+            out = await graph_api.graph_for_case(case_id=case_id, x_role=role, session=session)
+        except Exception as e:  # noqa: BLE001
+            out = _error(e)
+    await _audit(role, "mcp:get_case_graph", case_id, "ok" if "error" not in out else "denied")
+    return out
+
+
 # ─── Write tools (consent-gated) ─────────────────────────────────────────────
+
+
+async def _gated(ctx: Context, tool: str, permission: str, args: dict, message: str, write) -> dict[str, Any]:
+    """Permission first, then the user's consent, then the write. Never writes without 'accepted'."""
+    role = _role(ctx)
+    try:
+        check_permission(role, permission)
+    except PermissionDenied as e:
+        await _audit(role, f"mcp:{tool}", args.get("case_id"), "denied")
+        return _error(e)
+    outcome = await _consent(ctx, role, tool, args, message)
+    if outcome != "accepted":
+        return {"performed": False, "consent": outcome, "message": _REFUSED[outcome]}
+    async with async_session() as session:
+        try:
+            result = await write(session, role, _user(ctx, role))
+        except Exception as e:  # noqa: BLE001
+            return _error(e)
+    return {"performed": True, "consent": outcome, **result}
+
+
+@mcp.tool()
+async def add_case_note(ctx: Context, case_id: str, note: str) -> dict[str, Any]:
+    """Add an investigation note to a case after the user confirms."""
+    async def write(session, role, user):
+        return {"note": case_svc.note_dict(await case_svc.add_note(session, case_id, note, role, user, "mcp"))}
+    return await _gated(ctx, "add_case_note", "add_case_note", {"case_id": case_id, "note": note},
+                        f"Allow the assistant to add this note to case {case_id}: {note}?", write)
+
+
+@mcp.tool()
+async def split_case_alert(ctx: Context, case_id: str, alert_id: str, reason: str) -> dict[str, Any]:
+    """Move a wrongly grouped alert out of a case into a new case, after the user confirms.
+    Nothing is deleted; both cases keep their alerts and evidence."""
+    async def write(session, role, user):
+        new = await case_svc.split_alert(session, case_id, alert_id, reason, role, user, "mcp")
+        return {"new_case": case_svc.case_dict(new)}
+    args = {"case_id": case_id, "alert_id": alert_id, "reason": reason}
+    return await _gated(ctx, "split_case_alert", "record_case_decision", args,
+                        f"Allow the assistant to split alert {alert_id} out of case {case_id}? Reason: {reason}",
+                        write)
+
+
+@mcp.tool()
+async def recommend_action(ctx: Context, case_id: str, kind: str, reason: str) -> dict[str, Any]:
+    """Recommend a temporary hold or enhanced verification (kind: hold | verification) after the user
+    confirms. It stays a recommendation until a different Supervisor approves it in the web app, and
+    no account or transaction is ever changed."""
+    if kind not in ("hold", "verification"):
+        return {"error": "kind must be hold or verification", "status": 400}
+
+    async def write(session, role, user):
+        case = await det_api.record_case_decision(session, case_id, f"recommend_{kind}", reason, role, "mcp", user)
+        return {"case": det_api._case_dict(case), "status": "pending supervisor approval"}
+    return await _gated(ctx, "recommend_action", "record_case_decision",
+                        {"case_id": case_id, "kind": kind, "reason": reason},
+                        f"Allow the assistant to recommend a {kind} on case {case_id}? Reason: {reason}", write)
+
 
 @mcp.tool()
 async def record_case_decision(ctx: Context, case_id: str, decision: str, reason: str) -> dict[str, Any]:
-    """Record a decision on a case after the user confirms.
-    decision: requires_investigation | false_positive | escalate. reason is required."""
+    """Record a decision on a case after the user confirms. reason is required.
+    decision: requires_investigation | false_positive | escalate | request_info | conclude."""
     role = _role(ctx)
     try:  # check permission before bothering the user with a prompt they cannot satisfy
         check_permission(role, det_api._DECISION_PERMISSION.get(decision, "record_case_decision"))
@@ -207,7 +303,8 @@ async def record_case_decision(ctx: Context, case_id: str, decision: str, reason
 
     async with async_session() as session:
         try:
-            case = await det_api.record_case_decision(session, case_id, decision, reason, role, "mcp")
+            case = await det_api.record_case_decision(session, case_id, decision, reason, role, "mcp",
+                                                      _user(ctx, role))
         except Exception as e:  # noqa: BLE001
             return _error(e)
         return {"performed": True, "consent": outcome, "case": det_api._case_dict(case)}

@@ -1,5 +1,5 @@
 """
-Detection engine: runs all rules, deduplicates, persists Alert + Case records.
+Detection engine: runs all rules, deduplicates, persists alerts, then groups them into cases.
 """
 import uuid
 from datetime import datetime, timezone
@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import write_audit
-from app.models import Alert, Case
+from app.detection.correlation import consolidate
+from app.models import Alert
 from app.detection.rules import run_all_rules
 
 
@@ -63,10 +64,8 @@ async def run_detection(
     }
 
     new_alerts = 0
-    new_cases = 0
     cleared_count = 0
     review_ids: list[str] = []
-    cases: list[Case] = []  # added after alerts are flushed (FK order)
 
     for hit in hits:
         key = (hit.rule_id, hit.entity_id)
@@ -103,23 +102,13 @@ async def run_detection(
         if hit.cleared:
             cleared_count += 1
         elif band in ("Medium", "High"):
-            # FR7.1: only actionable (Medium/High) alerts open a case; Low stays on the dashboard
             review_ids.append(alert.alert_id)
-            case = Case(
-                case_id=str(uuid.uuid4()),
-                alert_id=alert.alert_id,
-                customer_id=hit.customer_id,
-                fraud_category=hit.fraud_category,
-                risk_level=band,
-                status="new",
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-            )
-            cases.append(case)
-            new_cases += 1
 
     await session.flush()
-    session.add_all(cases)
+    # Level 2: alerts sharing an identifier become one investigation; a group needs a
+    # Medium/High alert to open a case (FR7.1: Low alone stays on the dashboard).
+    grouping = await consolidate(session)
+    new_cases = grouping["new_cases"]
     await session.commit()
 
     await write_audit(
@@ -128,7 +117,7 @@ async def run_detection(
         channel=channel,
         action="run_detection",
         target=None,
-        result=f"new_alerts={new_alerts} new_cases={new_cases} cleared={cleared_count}",
+        result=f"new_alerts={new_alerts} new_cases={new_cases} linked={grouping['linked_alerts']} cleared={cleared_count}",
     )
     await session.commit()
 
@@ -136,6 +125,7 @@ async def run_detection(
         "new_alerts": new_alerts,
         "new_cases": new_cases,
         "cleared_count": cleared_count,
+        "linked_alerts": grouping["linked_alerts"],
         "total_hits": len(hits),
         "review_alert_ids": review_ids,
     }

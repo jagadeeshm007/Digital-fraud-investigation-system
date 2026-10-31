@@ -20,8 +20,15 @@ const STATUSES = [
   { value: ALL, label: 'All statuses' },
   { value: 'new', label: 'New' },
   { value: 'under_investigation', label: 'Under investigation' },
+  { value: 'info_requested', label: 'Info requested' },
   { value: 'escalated', label: 'Escalated' },
   { value: 'closed', label: 'Closed' },
+  { value: 'concluded', label: 'Concluded' },
+]
+const REVIEW = [
+  { value: ALL, label: 'All cases' },
+  { value: 'true', label: 'Needs review only' },
+  { value: 'false', label: 'Hide needs review' },
 ]
 const RISKS = [
   { value: ALL, label: 'All risk levels' },
@@ -32,7 +39,13 @@ const RISKS = [
 
 export function StatusBadge({ status }: { status: string }) {
   const variant =
-    status === 'escalated' ? 'error' : status === 'closed' ? 'success' : status === 'new' ? 'info' : 'warning'
+    status === 'escalated'
+      ? 'error'
+      : status === 'closed' || status === 'concluded'
+        ? 'success'
+        : status === 'new'
+          ? 'info'
+          : 'warning'
   return (
     <Badge variant={variant} className="capitalize">
       {status.replaceAll('_', ' ')}
@@ -45,6 +58,7 @@ export default function CasesPage() {
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState(ALL)
   const [risk, setRisk] = useState(ALL)
+  const [review, setReview] = useState(ALL)
   const [data, setData] = useState<Paged<Case> | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -57,12 +71,13 @@ export default function CasesPage() {
           page_size: PAGE_SIZE,
           status: status === ALL ? undefined : status,
           risk_level: risk === ALL ? undefined : risk,
+          needs_review: review === ALL ? undefined : review,
         }),
       )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load cases')
     }
-  }, [page, status, risk])
+  }, [page, status, risk, review])
 
   useEffect(() => {
     void load()
@@ -74,7 +89,7 @@ export default function CasesPage() {
     <section className="space-y-5">
       <PageHeader
         title="Cases"
-        description="Medium and High alerts become cases for investigation."
+        description="Investigations, highest priority first. Alerts that share an identifier are grouped into one case."
         action={
           <Button variant="outline" onClick={() => void load()}>
             <RefreshCwIcon />
@@ -94,6 +109,7 @@ export default function CasesPage() {
           <div className="flex flex-wrap gap-2">
             <Filter label="Status" items={STATUSES} value={status} onChange={(v) => (setStatus(v), setPage(1))} />
             <Filter label="Risk level" items={RISKS} value={risk} onChange={(v) => (setRisk(v), setPage(1))} />
+            <Filter label="Needs review" items={REVIEW} value={review} onChange={(v) => (setReview(v), setPage(1))} />
           </div>
 
           {!data && !error ? (
@@ -113,8 +129,10 @@ export default function CasesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Priority</TableHead>
                   <TableHead>Risk</TableHead>
                   <TableHead>Category</TableHead>
+                  <TableHead>Alerts</TableHead>
                   <TableHead>Customer</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Updated</TableHead>
@@ -124,6 +142,12 @@ export default function CasesPage() {
                 {data?.items.map((c) => (
                   <TableRow key={c.case_id}>
                     <TableCell>
+                      <span className="flex items-center gap-2">
+                        <span className="w-7 font-medium tabular-nums">{c.priority_score}</span>
+                        {c.needs_review && <Badge variant="warning">Needs review</Badge>}
+                      </span>
+                    </TableCell>
+                    <TableCell>
                       <RiskBadge band={c.risk_level} score={undefined} />
                     </TableCell>
                     <TableCell>
@@ -131,6 +155,7 @@ export default function CasesPage() {
                         {c.fraud_category}
                       </Link>
                     </TableCell>
+                    <TableCell className="tabular-nums">{c.alert_count ?? 1}</TableCell>
                     <TableCell className="font-mono text-xs">{c.customer_id ?? '-'}</TableCell>
                     <TableCell>
                       <StatusBadge status={c.status} />

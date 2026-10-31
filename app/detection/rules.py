@@ -46,6 +46,7 @@ async def run_all_rules(session: AsyncSession) -> list[DetectionHit]:
         r4_loan_ring,
         r5_dup_claim,
         r6_synthetic_identity,
+        r7_changed_account_loan,
     ]:
         hits.extend(await fn(session))
     return hits
@@ -666,4 +667,55 @@ async def r6_synthetic_identity(session: AsyncSession) -> list[DetectionHit]:
                         product="banking",
                     ))
 
+    return hits
+
+
+# ─── R7: Loan paid into a recently changed account (Level 2 cross-system) ─────
+
+_CHANGE_WINDOW = timedelta(days=7)
+
+
+async def r7_changed_account_loan(session: AsyncSession) -> list[DetectionHit]:
+    loans = (await session.execute(select(LoanApplication))).scalars().all()
+    if not loans:
+        return []
+    owners = {a.account_id: a.customer_id for a in (await session.execute(select(Account))).scalars().all()}
+    changes = (await session.execute(
+        select(LoginEvent).where(LoginEvent.event_type == "profile_change", LoginEvent.outcome == "success")
+    )).scalars().all()
+    ben_changes = (await session.execute(select(BeneficiaryChange))).scalars().all()
+
+    hits: list[DetectionHit] = []
+    for loan in loans:
+        acc = loan.disbursement_account_id
+        if not acc:
+            continue
+        owner = owners.get(acc)
+        start = loan.applied_at - _CHANGE_WINDOW
+        # Either the owner changed their account details, or the payout account was only just added as a payee.
+        change = next((e for e in changes if e.customer_id == owner and start <= e.timestamp <= loan.applied_at), None)
+        change_id = change.event_id if change else None
+        what = "Account details changed"
+        if not change_id:
+            ben = next((bc for bc in ben_changes if bc.payee_account_id == acc
+                        and start <= bc.changed_at <= loan.applied_at), None)
+            change_id = ben.change_id if ben else None
+            what = "Payout account added as a new payee"
+        if not change_id:
+            continue
+        hits.append(DetectionHit(
+            rule_id="R7-CHANGED-ACCOUNT-LOAN",
+            fraud_category="Lending Fraud",
+            entity_type="loan_application",
+            entity_id=loan.application_id,
+            customer_id=loan.customer_id,
+            factors=[
+                {"factor": f"{what} within 7 days before the loan application", "points": 25,
+                 "evidence_id": change_id},
+                {"factor": f"Loan of ₹{float(loan.amount_inr):,.0f} paid into account {acc}", "points": 15,
+                 "evidence_id": loan.application_id},
+            ],
+            base_score=40,
+            product="lending",
+        ))
     return hits

@@ -28,6 +28,7 @@ import {
   FileTextIcon,
   GlobeIcon,
   LogInIcon,
+  PhoneIcon,
   ShieldAlertIcon,
   SirenIcon,
   SmartphoneIcon,
@@ -46,7 +47,7 @@ import { getGraph, type EntityGraphData, type GraphNodeType } from '@/lib/api'
 // edges for shared identifiers, d3-force layout, and a keyboard-reachable text list of the links.
 // Data comes from GET /api/graph/alert/{id} and /api/graph/entity/{id} (app/graph/builder.py).
 
-const TYPE_META: Record<GraphNodeType, { label: string; icon: typeof UserIcon }> = {
+export const TYPE_META: Record<GraphNodeType, { label: string; icon: typeof UserIcon }> = {
   alert: { label: 'Alert', icon: SirenIcon },
   customer: { label: 'Customer', icon: UserIcon },
   account: { label: 'Account', icon: CreditCardIcon },
@@ -57,6 +58,8 @@ const TYPE_META: Record<GraphNodeType, { label: string; icon: typeof UserIcon }>
   beneficiary_change: { label: 'Payee change', icon: UserPlusIcon },
   loan_application: { label: 'Loan application', icon: FileTextIcon },
   insurance_claim: { label: 'Insurance claim', icon: ShieldAlertIcon },
+  phone: { label: 'Phone', icon: PhoneIcon },
+  policy: { label: 'Policy', icon: ShieldAlertIcon },
 }
 
 // A device or IP used across many records or customers is the shared identifier the spec asks to surface.
@@ -67,7 +70,7 @@ const humanize = (s: string) => s.replaceAll('_', ' ')
 type SimNode = SimulationNodeDatum & { id: string }
 
 /** Runs d3-force to completion synchronously; the focus entity is pinned at the centre. */
-function layout(data: EntityGraphData, focus: string): Map<string, { x: number; y: number }> {
+export function layout(data: EntityGraphData, focus: string): Map<string, { x: number; y: number }> {
   const simNodes: SimNode[] = data.nodes.map((n) => ({ id: n.id, ...(n.id === focus ? { fx: 0, fy: 0 } : {}) }))
   const simLinks: SimulationLinkDatum<SimNode>[] = data.edges.map((e) => ({ source: e.source, target: e.target }))
   const sim = forceSimulation(simNodes)
@@ -108,7 +111,7 @@ function sharedHubs(data: EntityGraphData): Set<string> {
   return hubs
 }
 
-type EntityNodeData = { type: GraphNodeType; label: string; focus: boolean; hub: boolean; band?: string }
+export type EntityNodeData = { type: GraphNodeType; label: string; focus: boolean; hub: boolean; band?: string }
 
 function EntityNode({ data }: NodeProps<Node<EntityNodeData>>) {
   const meta = TYPE_META[data.type] ?? { label: humanize(data.type), icon: UserIcon }
@@ -137,10 +140,10 @@ function EntityNode({ data }: NodeProps<Node<EntityNodeData>>) {
   )
 }
 
-const nodeTypes = { entity: EntityNode }
+export const nodeTypes = { entity: EntityNode }
 
 /** Re-fits once nodes are measured and whenever the panel resizes (lazy CSS, grid reflow, sidebar toggle). */
-function AutoFit() {
+export function AutoFit() {
   const { fitView } = useReactFlow()
   const initialized = useNodesInitialized()
   const width = useStore((s) => s.width)

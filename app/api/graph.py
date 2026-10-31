@@ -38,6 +38,50 @@ async def graph_for_alert(
     return await _graph_response(session, alert_id, depth)
 
 
+# ── GET /api/graph/case/{case_id} ────────────────────────────────────────────
+# Investigation network: the case's alerts and the identifiers in their evidence. Every edge is an
+# identifier read from a record (never from the AI); an identifier shared by 2+ alerts is a match.
+
+@router.get("/graph/case/{case_id}")
+async def graph_for_case(
+    case_id: str,
+    x_role: str | None = Header(default=None, alias="X-Role"),
+    session: AsyncSession = Depends(get_session),
+):
+    check_permission(resolve_role(x_role), "view_cases")
+    from app.cases import case_members
+    from app.detection.correlation import alert_identifier_sources
+    from app.models import Case
+
+    if not await session.get(Case, case_id):
+        raise HTTPException(404, detail="Case not found")
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+    shared: dict[str, set[str]] = {}
+    for _ca, a in await case_members(session, case_id):
+        nodes[a.alert_id] = {"id": a.alert_id, "type": "alert", "data": {
+            "label": a.rule_id, "rule_id": a.rule_id, "risk_band": a.risk_band, "final_score": a.final_score,
+            "fraud_category": a.fraud_category, "product": a.product}}
+        for (kind, value), sources in sorted((await alert_identifier_sources(session, a)).items()):
+            nid = f"{kind}:{value}"
+            nodes.setdefault(nid, {"id": nid, "type": _NODE_TYPE.get(kind, kind),
+                                   "data": {"label": value, "kind": kind, "entity_id": value}})
+            shared.setdefault(nid, set()).add(a.alert_id)
+            edges.append({"id": f"{a.alert_id}__{nid}", "source": a.alert_id, "target": nid,
+                          "label": f"{kind} {value}", "match": {"type": kind, "value": value},
+                          "evidence": sources, "origin": "identifier"})
+    for nid, alert_ids in shared.items():
+        nodes[nid]["data"]["alert_count"] = len(alert_ids)
+        nodes[nid]["data"]["shared"] = len(alert_ids) > 1
+    for e in edges:
+        e["shared"] = len(shared[e["target"]]) > 1
+    return {"case_id": case_id, "nodes": list(nodes.values()), "edges": edges}
+
+
+_NODE_TYPE = {"application": "loan_application", "claim": "insurance_claim", "ip": "ip_address",
+              "policy": "policy", "phone": "phone"}
+
+
 # ── GET /api/graph/customer/{customer_id} ────────────────────────────────────
 # Full entity graph centred on a customer.
 

@@ -14,18 +14,22 @@ from app.detection.engine import run_detection
 from app.evidence import load_evidence
 from app.exceptions import PermissionDenied
 from app.masking import REVEALABLE, mask
+from app.cases import case_dict, workspace
+from app.detection.correlation import FINAL_STATUSES
 from app.models import (
     Account,
     Alert,
     Case,
+    CaseAlert,
     CaseHistory,
+    Recommendation,
     Customer,
     InsuranceClaim,
     LoanApplication,
     LoginEvent,
     Transaction,
 )
-from app.permissions import check_permission, resolve_role
+from app.permissions import check_permission, resolve_role, resolve_user
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["detection"])
@@ -149,7 +153,7 @@ async def get_alert(
         raise HTTPException(404, detail="Alert not found")
 
     case_id = (await session.execute(
-        select(Case.case_id).where(Case.alert_id == alert_id)
+        select(CaseAlert.case_id).where(CaseAlert.alert_id == alert_id)
     )).scalar_one_or_none()
     return {**_alert_dict(alert), "case_id": case_id, "evidence": await load_evidence(session, alert)}
 
@@ -161,6 +165,7 @@ async def list_cases(
     customer_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
     risk_level: str | None = Query(default=None),
+    needs_review: bool | None = Query(default=None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     x_role: str | None = Header(default=None, alias="X-Role"),
@@ -172,7 +177,10 @@ async def list_cases(
     except PermissionDenied as e:
         raise HTTPException(403, detail=str(e))
 
-    q = select(Case).order_by(Case.created_at.desc())
+    # Case queue: highest priority first (Level 2 §6)
+    q = select(Case).order_by(Case.priority_score.desc(), Case.created_at.desc())
+    if needs_review is not None:
+        q = q.where(Case.needs_review == needs_review)
     if customer_id:
         q = q.where(Case.customer_id == customer_id)
     if status:
@@ -186,9 +194,13 @@ async def list_cases(
 
     offset = (page - 1) * page_size
     rows = (await session.execute(q.offset(offset).limit(page_size))).scalars().all()
+    counts = dict((await session.execute(
+        select(CaseAlert.case_id, func.count()).where(CaseAlert.case_id.in_([c.case_id for c in rows]))
+        .group_by(CaseAlert.case_id)
+    )).all())
 
     return {
-        "items": [_case_dict(c) for c in rows],
+        "items": [{**_case_dict(c), "alert_count": counts.get(c.case_id, 1)} for c in rows],
         "page": page,
         "page_size": page_size,
         "total": total,
@@ -213,36 +225,40 @@ async def get_case(
     if not case:
         raise HTTPException(404, detail="Case not found")
 
-    history = (await session.execute(
-        select(CaseHistory)
-        .where(CaseHistory.case_id == case_id)
-        .order_by(CaseHistory.changed_at)
-    )).scalars().all()
-
     customer = await session.get(Customer, case.customer_id) if case.customer_id else None
     masked = {f: mask(str(getattr(customer, f)), f) for f in REVEALABLE} if customer else None
-    return {**_case_dict(case), "customer": masked, "history": [_history_dict(h) for h in history]}
+    return {**await workspace(session, case), "customer": masked}
 
 
 # ─── PATCH /api/cases/{case_id}/decision ─────────────────────────────────────
 
 class DecisionRequest(BaseModel):
-    decision: str  # requires_investigation | false_positive | escalate
+    # requires_investigation | false_positive | escalate | request_info
+    # | recommend_hold | recommend_verification | conclude
+    decision: str
     reason: str
 
 
-_VALID_DECISIONS = {"requires_investigation", "false_positive", "escalate"}
-
+# None keeps the status: a recommendation does not move the case, it waits for a Supervisor.
 _DECISION_STATUS_MAP = {
     "requires_investigation": "under_investigation",
     "false_positive": "closed",
     "escalate": "escalated",
+    "request_info": "info_requested",
+    "recommend_hold": None,
+    "recommend_verification": None,
+    "conclude": "concluded",
 }
+_VALID_DECISIONS = set(_DECISION_STATUS_MAP)
 
 _DECISION_PERMISSION = {
     "requires_investigation": "record_case_decision",
     "false_positive": "record_case_decision",
     "escalate": "escalate_case",
+    "request_info": "record_case_decision",
+    "recommend_hold": "record_case_decision",
+    "recommend_verification": "record_case_decision",
+    "conclude": "record_case_decision",
 }
 
 
@@ -254,7 +270,8 @@ class DecisionError(Exception):
 
 
 async def record_case_decision(
-    session: AsyncSession, case_id: str, decision: str, reason: str, role: str, channel: str
+    session: AsyncSession, case_id: str, decision: str, reason: str, role: str, channel: str,
+    user: str | None = None,
 ) -> Case:
     """Shared by the web API and the MCP gateway, so both enforce the same rules (ADR-006)."""
     if decision not in _VALID_DECISIONS:
@@ -266,20 +283,31 @@ async def record_case_decision(
     case = (await session.execute(select(Case).where(Case.case_id == case_id))).scalar_one_or_none()
     if not case:
         raise DecisionError(404, "Case not found")
-    if case.status in ("closed", "escalated"):
+    if case.status in FINAL_STATUSES:
         raise DecisionError(409, f"Case is already {case.status}")
 
-    from_status, to_status = case.status, _DECISION_STATUS_MAP[decision]
+    user = user or resolve_user(None, role)
+    from_status = case.status
+    to_status = _DECISION_STATUS_MAP[decision] or from_status
     now = datetime.now(timezone.utc)
     session.add(CaseHistory(
         history_id=str(uuid.uuid4()), case_id=case_id, changed_at=now, changed_by=role,
-        from_status=from_status, to_status=to_status, decision=decision, reason=reason,
+        from_status=from_status, to_status=to_status, decision=decision, reason=reason, user_id=user,
     ))
+    if decision.startswith("recommend_"):
+        # Only a recommendation: a Supervisor other than the maker must approve it, and even
+        # then nothing in any account or transaction changes.
+        session.add(Recommendation(
+            recommendation_id=str(uuid.uuid4()), case_id=case_id, kind=decision.removeprefix("recommend_"),
+            reason=reason, status="pending", maker_user=user, maker_role=role, created_at=now,
+        ))
+    if decision == "conclude":
+        case.conclusion = reason
     case.status = to_status
     case.updated_at = now
     await write_audit(
         session, role=role, channel=channel, action="record_case_decision",
-        target=case_id, result=f"{decision}: {reason[:80]}",
+        target=case_id, result=f"{decision}: {reason[:80]}", user=user,
     )
     await session.commit()
     return case
@@ -290,11 +318,13 @@ async def record_decision(
     case_id: str,
     body: DecisionRequest,
     x_role: str | None = Header(default=None, alias="X-Role"),
+    x_user: str | None = Header(default=None, alias="X-User"),
     session: AsyncSession = Depends(get_session),
 ):
     role = resolve_role(x_role)
     try:
-        case = await record_case_decision(session, case_id, body.decision, body.reason, role, "api")
+        case = await record_case_decision(session, case_id, body.decision, body.reason, role, "api",
+                                          resolve_user(x_user, role))
     except PermissionDenied as e:
         raise HTTPException(403, detail=str(e))
     except DecisionError as e:
@@ -343,7 +373,8 @@ async def detection_summary(
         "risk_distribution": risk_distribution,
         "fraud_categories": category_counts,
         "case_statuses": case_status_counts,
-        "open_cases": len([c for c in cases if c.status not in ("closed", "escalated")]),
+        "open_cases": len([c for c in cases if c.status not in FINAL_STATUSES]),
+        "needs_review_cases": len([c for c in cases if c.needs_review and c.status not in FINAL_STATUSES]),
     }
 
 
@@ -372,25 +403,4 @@ def _alert_dict(a: Alert) -> dict:
 
 
 def _case_dict(c: Case) -> dict:
-    return {
-        "case_id": c.case_id,
-        "alert_id": c.alert_id,
-        "customer_id": c.customer_id,
-        "fraud_category": c.fraud_category,
-        "risk_level": c.risk_level,
-        "status": c.status,
-        "created_at": c.created_at.isoformat(),
-        "updated_at": c.updated_at.isoformat(),
-    }
-
-
-def _history_dict(h: CaseHistory) -> dict:
-    return {
-        "history_id": h.history_id,
-        "changed_at": h.changed_at.isoformat(),
-        "changed_by": h.changed_by,
-        "from_status": h.from_status,
-        "to_status": h.to_status,
-        "decision": h.decision,
-        "reason": h.reason,
-    }
+    return case_dict(c)

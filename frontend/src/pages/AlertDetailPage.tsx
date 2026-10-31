@@ -1,6 +1,6 @@
 import { ArrowLeftIcon, SparklesIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
 import EntityGraph from '@/components/EntityGraph'
 import PageHeader from '@/components/PageHeader'
 import RiskBadge from '@/components/RiskBadge'
@@ -9,12 +9,28 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getAlert, type Alert } from '@/lib/api'
+import { toastManager } from '@/components/ui/toast'
+import { can, getAlert, openCaseFromAlert, type Alert } from '@/lib/api'
+import { useRole } from '@/lib/role'
 
 export default function AlertDetailPage() {
   const { alertId = '' } = useParams()
-  const [alert, setAlert] = useState<Alert | null>(null)
+  const [alert, setAlert] = useState<(Alert & { case_id?: string | null }) | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const role = useRole()
+  const navigate = useNavigate()
+
+  // Detection leaves Low alerts without a case; an investigator can still open one with a reason.
+  const openCase = async () => {
+    const reason = window.prompt('Why open a case for this alert?')?.trim()
+    if (!reason) return
+    try {
+      const c = await openCaseFromAlert(alertId, reason)
+      void navigate(`/cases/${c.case_id}`)
+    } catch (e) {
+      toastManager.add({ type: 'error', title: 'Case not opened', description: e instanceof Error ? e.message : '' })
+    }
+  }
 
   useEffect(() => {
     setAlert(null)
@@ -72,6 +88,18 @@ export default function AlertDetailPage() {
           )}
           {alert.product && <> · {alert.product}</>} · rule <span className="font-mono">{alert.rule_id}</span>
         </span>
+        {alert.case_id ? (
+          <Button size="sm" variant="outline" render={<Link to={`/cases/${alert.case_id}`} />}>
+            Open its investigation
+          </Button>
+        ) : (
+          alert.status === 'open' &&
+          can.decide(role) && (
+            <Button size="sm" variant="outline" onClick={() => void openCase()}>
+              Open a case
+            </Button>
+          )
+        )}
       </div>
 
       <div aria-live="polite">
