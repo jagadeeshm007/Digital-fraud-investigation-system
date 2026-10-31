@@ -35,6 +35,54 @@ async def _apply_review(alert: Alert, session: AsyncSession) -> dict:
     return result
 
 
+# ─── POST /api/ai/review/run — review all pending alerts ─────────────────────
+
+# Registered before /ai/review/{alert_id} so "run" is not captured as an alert id.
+@router.post("/ai/review/run")
+async def review_all_pending(
+    limit: int = Query(20, ge=1, le=100),
+    x_role: str | None = Header(default=None, alias="X-Role"),
+    session: AsyncSession = Depends(get_session),
+):
+    role = resolve_role(x_role)
+    try:
+        check_permission(role, "view_ai_log")
+    except PermissionDenied as e:
+        raise HTTPException(403, detail=str(e))
+
+    pending = (await session.execute(
+        select(Alert)
+        .where(Alert.ai_status == "pending", Alert.status == "open")
+        .limit(limit)
+    )).scalars().all()
+
+    completed = 0
+    unavailable = 0
+
+    for alert in pending:
+        result = await _apply_review(alert, session)
+        if result["ai_available"]:
+            completed += 1
+        else:
+            unavailable += 1
+
+    await write_audit(
+        session,
+        role=role,
+        channel="api",
+        action="ai_review_batch",
+        target=None,
+        result=f"completed={completed} unavailable={unavailable}",
+    )
+    await session.commit()
+
+    return {
+        "reviewed": len(pending),
+        "completed": completed,
+        "unavailable": unavailable,
+    }
+
+
 # ─── POST /api/ai/review/{alert_id} ──────────────────────────────────────────
 
 @router.post("/ai/review/{alert_id}")
@@ -83,51 +131,4 @@ async def review_one(
         "ai_available": result["ai_available"],
         "model_used": result.get("model_used"),
         "ai_status": alert.ai_status,
-    }
-
-
-# ─── POST /api/ai/review/run — review all pending alerts ─────────────────────
-
-@router.post("/ai/review/run")
-async def review_all_pending(
-    limit: int = Query(20, ge=1, le=100),
-    x_role: str | None = Header(default=None, alias="X-Role"),
-    session: AsyncSession = Depends(get_session),
-):
-    role = resolve_role(x_role)
-    try:
-        check_permission(role, "view_ai_log")
-    except PermissionDenied as e:
-        raise HTTPException(403, detail=str(e))
-
-    pending = (await session.execute(
-        select(Alert)
-        .where(Alert.ai_status == "pending", Alert.status == "open")
-        .limit(limit)
-    )).scalars().all()
-
-    completed = 0
-    unavailable = 0
-
-    for alert in pending:
-        result = await _apply_review(alert, session)
-        if result["ai_available"]:
-            completed += 1
-        else:
-            unavailable += 1
-
-    await write_audit(
-        session,
-        role=role,
-        channel="api",
-        action="ai_review_batch",
-        target=None,
-        result=f"completed={completed} unavailable={unavailable}",
-    )
-    await session.commit()
-
-    return {
-        "reviewed": len(pending),
-        "completed": completed,
-        "unavailable": unavailable,
     }
