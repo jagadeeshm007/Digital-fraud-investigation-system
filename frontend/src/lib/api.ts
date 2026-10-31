@@ -82,6 +82,12 @@ export interface AlertFactor {
   evidence_id?: string
 }
 
+export interface EvidenceRecord {
+  id: string
+  type: string
+  record: Record<string, string | number | boolean | null>
+}
+
 export interface Alert {
   alert_id: string
   rule_id: string
@@ -100,6 +106,9 @@ export interface Alert {
   ai_status: string
   status: string
   cleared_reason: string | null
+  // only present on single-alert fetch (not list)
+  case_id?: string | null
+  evidence?: EvidenceRecord[]
 }
 
 export interface Paged<T> {

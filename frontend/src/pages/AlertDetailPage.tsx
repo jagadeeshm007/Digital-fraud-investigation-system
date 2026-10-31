@@ -9,7 +9,54 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardPanel, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getAlert, type Alert } from '@/lib/api'
+import { getAlert, type Alert, type EvidenceRecord } from '@/lib/api'
+
+const TYPE_LABELS: Record<string, string> = {
+  transaction: 'Transaction',
+  login_event: 'Login Event',
+  beneficiary_change: 'Beneficiary Change',
+  loan_application: 'Loan Application',
+  insurance_claim: 'Insurance Claim',
+  customer: 'Customer',
+  account: 'Account',
+}
+
+// Fields to show first (in order) when present
+const PRIORITY_FIELDS = ['timestamp', 'applied_at', 'changed_at', 'claim_date', 'incident_date', 'amount_inr', 'channel', 'status', 'outcome', 'event_type']
+
+function label(key: string) {
+  return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function EvidenceCard({ ev }: { ev: EvidenceRecord }) {
+  const allKeys = Object.keys(ev.record)
+  const priority = PRIORITY_FIELDS.filter((k) => allKeys.includes(k))
+  const rest = allKeys.filter((k) => !PRIORITY_FIELDS.includes(k))
+  const ordered = [...priority, ...rest]
+
+  return (
+    <div className="rounded-lg border text-sm">
+      <div className="flex items-center gap-2 border-b px-3 py-2 bg-muted/40">
+        <Badge variant="outline" className="capitalize text-xs">
+          {TYPE_LABELS[ev.type] ?? ev.type}
+        </Badge>
+        <span className="font-mono text-muted-foreground text-xs truncate">{ev.id}</span>
+      </div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 px-3 py-2">
+        {ordered.map((k) => {
+          const v = ev.record[k]
+          if (v === null || v === undefined) return null
+          return (
+            <>
+              <dt key={`dt-${k}`} className="text-muted-foreground whitespace-nowrap">{label(k)}</dt>
+              <dd key={`dd-${k}`} className="font-mono break-all">{String(v)}</dd>
+            </>
+          )
+        })}
+      </dl>
+    </div>
+  )
+}
 
 export default function AlertDetailPage() {
   const { alertId = '' } = useParams()
@@ -130,6 +177,22 @@ export default function AlertDetailPage() {
           </ol>
         </CardPanel>
       </Card>
+
+      {alert.evidence && alert.evidence.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Ingested records</CardTitle>
+            <CardDescription>
+              Complete data for the flagged entity and all cited evidence — {alert.evidence.length} record{alert.evidence.length !== 1 ? 's' : ''}.
+            </CardDescription>
+          </CardHeader>
+          <CardPanel className="space-y-3">
+            {alert.evidence.map((ev) => (
+              <EvidenceCard key={ev.id} ev={ev} />
+            ))}
+          </CardPanel>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     ai_review_batch: int = 25  # alerts reviewed in the background after each detection run
     mcp_stateless: bool = False  # MCP_STATELESS=1 on serverless hosts (Vercel): no in-memory sessions
     mcp_allowed_hosts: str = ""  # extra Host headers for /mcp, e.g. "dfis.onrender.com"
+    mcp_allowed_origins: str = ""  # extra Origin headers, e.g. "https://chatgpt.com"
 
 
 settings = Settings()
