@@ -64,7 +64,12 @@ const NODE_W = 196
 const COL_GAP = 300
 const ROW_GAP = 72
 
-function layout(
+// exported for CaseGraph which only needs positions
+export function layout(data: EntityGraphData, focus: string): Map<string, { x: number; y: number }> {
+  return _layout(data, focus).pos
+}
+
+function _layout(
   data: EntityGraphData,
   focus: string,
 ): { pos: Map<string, { x: number; y: number }>; depth: Map<string, number> } {
@@ -216,7 +221,7 @@ export default function EntityGraph({ alertId }: { alertId: string }) {
 
   const { nodes, edges } = useMemo<{ nodes: Node<EntityNodeData>[]; edges: Edge[] }>(() => {
     if (!graph) return { nodes: [], edges: [] }
-    const { pos: positions, depth } = layout(graph, centre)
+    const { pos: positions, depth } = _layout(graph, centre)
     const hubs = sharedHubs(graph)
     const showLabels = graph.edges.length <= 30
     return {

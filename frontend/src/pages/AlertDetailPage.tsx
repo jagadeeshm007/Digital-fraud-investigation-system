@@ -50,7 +50,7 @@ function EvidenceCard({ ev }: { ev: EvidenceRecord }) {
           return (
             <>
               <dt key={`dt-${k}`} className="text-muted-foreground whitespace-nowrap">{label(k)}</dt>
-              <dd key={`dd-${k}`} className="font-mono break-all">{String(v)}</dd>
+              <dd key={`dd-${k}`} className="font-mono break-all">{String(v as string | number | boolean)}</dd>
             </>
           )
         })}
