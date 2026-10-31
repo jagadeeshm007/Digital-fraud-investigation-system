@@ -1,0 +1,44 @@
+{
+  "unit": "u1-platform",
+  "stage": "functional-design",
+  "upstream_ids": ["FR1.1", "FR1.2", "FR1.3", "FR1.4", "FR1.5", "FR1.6", "FR2.1", "FR8.1", "FR8.2", "FR9.1", "FR9.2", "US1.1", "US1.2", "US1.3", "US1.4", "US1.5", "US7.1", "US7.2", "US8.1", "US8.2", "US11.1"],
+  "artifacts": [
+    {
+      "artifact": "entities.md",
+      "covers": [
+        { "id": "FR1.1", "note": "IngestionBatch, RejectedRecord entities support file upload and report" },
+        { "id": "FR1.4", "note": "RejectedRecord stores row_number, field, reason per validation failure" },
+        { "id": "FR1.5", "note": "RejectedRecord is persisted; nothing is silently dropped" },
+        { "id": "FR2.1", "note": "All 8 ActivityStore entity types: Customer, Account, Transaction, Device, LoginEvent, BeneficiaryChange, LoanApplication, InsuranceClaim" },
+        { "id": "FR8.1", "note": "Masking entity model; RevealEvent for supervisor reveal" },
+        { "id": "FR9.1", "note": "AuditEntry entity covers role, channel, action, target, result" }
+      ]
+    },
+    {
+      "artifact": "rules.md",
+      "covers": [
+        { "id": "FR1.2", "note": "BR-ING-2: CSV, Excel, JSON accepted; other formats rejected" },
+        { "id": "FR1.3", "note": "BR-ING-3: column mapping from SourceMapping config" },
+        { "id": "FR1.4", "note": "BR-ING-4 through BR-ING-7: mandatory field, type, allowed-value, duplicate checks" },
+        { "id": "FR1.5", "note": "BR-ING-9: every rejected record is stored" },
+        { "id": "FR1.6", "note": "BR-ING-8: unknown references are warnings, not rejections" },
+        { "id": "FR8.2", "note": "BR-MASK-1 through BR-MASK-5: PII field list, masking on all outbound paths, reveal rules" },
+        { "id": "FR9.2", "note": "BR-PERM-2: role permission matrix" },
+        { "id": "NFR-SEC-1", "note": "BR-SEC-3: secrets from env vars only; BR-SEC-4: parameterised SQL" }
+      ]
+    },
+    {
+      "artifact": "functional-spec.md",
+      "covers": [
+        { "id": "FR1.1", "note": "Flow 1: POST /api/ingest end-to-end" },
+        { "id": "FR1.4", "note": "Flow 1 step 6: per-row validation logic and rejection path" },
+        { "id": "FR1.5", "note": "Flow 2: GET /api/ingest/{batch_id}/rejected" },
+        { "id": "FR8.2", "note": "Flow 4: mask_entity outbound, Flow 5: supervisor reveal POST /api/masking/reveal" },
+        { "id": "FR9.1", "note": "Flow 3: permission check; Flow 6: audit trail retrieval" },
+        { "id": "US11.1", "note": "App skeleton section: FastAPI + Dockerfile + docker-compose layout" }
+      ]
+    }
+  ],
+  "stories_covered": ["US1.1", "US1.2", "US1.3", "US1.4", "US1.5", "US7.1", "US7.2", "US8.1", "US8.2", "US11.1"],
+  "requirements_covered": ["FR1.1", "FR1.2", "FR1.3", "FR1.4", "FR1.5", "FR1.6", "FR2.1", "FR8.1", "FR8.2", "FR9.1", "FR9.2"]
+}
