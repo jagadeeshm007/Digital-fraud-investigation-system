@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # AI review (Groq — migrate to OpenRouter later)
     groq_api_key: str = ""
-    groq_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "llama-3.3-70b-versatile"  # override with GROQ_MODEL env
     fake_llm: bool = False  # FAKE_LLM=1 in CI
 
 

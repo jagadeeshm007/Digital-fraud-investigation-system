@@ -81,6 +81,7 @@ async def review_one(
         "reasoning": result["reasoning"],
         "cited_evidence": result["cited_evidence"],
         "ai_available": result["ai_available"],
+        "model_used": result.get("model_used"),
         "ai_status": alert.ai_status,
     }
 
