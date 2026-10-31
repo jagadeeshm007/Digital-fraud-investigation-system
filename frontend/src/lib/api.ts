@@ -114,37 +114,39 @@ export function runDetection(): Promise<{
   return apiFetch('/detection/run', { method: 'POST' })
 }
 
-// LinkGraph contract (contract-summary.md: GET /api/links/{entity_id}, EntityLink).
-export type EntityType = 'customer' | 'account' | 'device' | 'application' | 'claim'
+// Entity graph from app/api/graph.py (React Flow-ready nodes and edges, PII masked server-side).
+export type GraphNodeType =
+  | 'customer'
+  | 'account'
+  | 'transaction'
+  | 'device'
+  | 'login_event'
+  | 'ip_address'
+  | 'beneficiary_change'
+  | 'loan_application'
+  | 'insurance_claim'
+  | 'alert'
 
 export interface GraphNode {
-  key: string
-  type: EntityType
   id: string
-  hops: number
-  is_focus: boolean
+  type: GraphNodeType
+  data: { label: string; [key: string]: unknown }
 }
 
-export interface EntityLink {
-  link_id: string
-  from_type: EntityType
-  from_id: string
-  to_type: EntityType
-  to_id: string
-  shared_attribute: string
-  shared_value_masked: string | null
-  count: number
+export interface GraphEdge {
+  id: string
+  source: string
+  target: string
+  label: string
 }
 
-export interface LinkGraph {
-  entity_id: string
+export interface EntityGraphData {
   nodes: GraphNode[]
-  links: EntityLink[]
-  truncated: boolean
+  edges: GraphEdge[]
 }
 
-export function getLinks(entityId: string, depth = 2): Promise<LinkGraph> {
-  return apiFetch<LinkGraph>(`/links/${encodeURIComponent(entityId)}?depth=${depth}`)
+export function getGraph(kind: 'alert' | 'entity', id: string, depth = 2): Promise<EntityGraphData> {
+  return apiFetch<EntityGraphData>(`/graph/${kind}/${encodeURIComponent(id)}?depth=${depth}`)
 }
 
 export interface AuditEntry {

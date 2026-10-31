@@ -51,8 +51,6 @@ export default function AlertDetailPage() {
     )
   }
 
-  // The graph starts from the flagged entity; a transaction alert is better explored from its customer.
-  const graphRoot = alert.entity_type === 'transaction' && alert.customer_id ? alert.customer_id : alert.entity_id
   const factors = [...(alert.factors ?? [])].sort((a, b) => b.points - a.points)
 
   return (
@@ -141,7 +139,7 @@ export default function AlertDetailPage() {
           </CardDescription>
         </CardHeader>
         <CardPanel>
-          <EntityGraph entityId={graphRoot} />
+          <EntityGraph alertId={alert.alert_id} />
         </CardPanel>
       </Card>
     </section>
