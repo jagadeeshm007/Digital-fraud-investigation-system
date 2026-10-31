@@ -116,11 +116,11 @@ async def build_graph(session: AsyncSession) -> EntityGraph:
             node_type="customer",
             data={
                 "label": c.customer_id,
-                "name": mask(c.name),
-                "phone": mask(c.phone),
-                "email": mask(c.email),
-                "identity_number": mask(c.identity_number),
-                "address": mask(c.address),
+                "name": mask(c.name, "name"),
+                "phone": mask(c.phone, "phone"),
+                "email": mask(c.email, "email"),
+                "identity_number": mask(c.identity_number, "identity_number"),
+                "address": mask(c.address, "address"),
             },
         ))
 
@@ -170,9 +170,10 @@ async def build_graph(session: AsyncSession) -> EntityGraph:
             _ensure_device(g, ev.device_id)
             g.add_edge(ev.event_id, ev.device_id, "used_device")
         if ev.ip_address:
-            ip_node_id = f"ip:{ev.ip_address}"
+            masked_ip = mask(ev.ip_address, "ip_address")  # raw IP is PII — never a node id or label
+            ip_node_id = f"ip:{masked_ip}"
             if ip_node_id not in g.nodes:
-                g.add_node(GNode(id=ip_node_id, node_type="ip_address", data={"label": ev.ip_address}))
+                g.add_node(GNode(id=ip_node_id, node_type="ip_address", data={"label": masked_ip}))
             g.add_edge(ev.event_id, ip_node_id, "from_ip")
 
     # ── Beneficiary changes ───────────────────────────────────────────────────

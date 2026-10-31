@@ -54,7 +54,12 @@ def _build_url(raw: str) -> tuple[str, dict]:
             ))
             needs_ssl = True
 
-    return url, {"ssl": _ssl_ctx()} if needs_ssl else {}
+    args: dict = {"ssl": _ssl_ctx()} if needs_ssl else {}
+    if "pooler.supabase.com" in (urlparse(url).hostname or ""):
+        # Supavisor transaction mode (port 6543) shares connections between clients, which
+        # breaks asyncpg's prepared-statement cache; harmless in session mode (5432).
+        args["statement_cache_size"] = 0
+    return url, args
 
 
 def _resolves_ipv4(host: str) -> bool:

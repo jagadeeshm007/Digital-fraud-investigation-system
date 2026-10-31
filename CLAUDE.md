@@ -35,11 +35,23 @@ app/
   permissions.py   # PERMISSION_MATRIX + check_permission
   audit.py         # write_audit helper
   ingestion.py     # ingest pipeline + per-source writers
+  evidence.py      # resolve alert evidence ids -> masked records
+  sample_data.py   # synthetic data + planted scenarios (EXPECTED_FLAGS is the ground truth)
+  mcp_server.py    # MCP tools at /mcp; writes are consent-gated via elicitation
+  detection/       # rules.py (R1-R6), engine.py (correlation bonus, Medium/High -> case)
+  ai/review.py     # Groq review, ±10 clamp, citation guard, budget, FAKE_LLM
+  graph/builder.py # entity graph for React Flow (masked)
   api/
-    ingest.py      # POST /api/ingest, GET /api/ingest/{id}/rejected
-    masking_router.py  # POST /api/masking/reveal
+    ingest.py      # POST /api/ingest, /api/ingest/sample, GET /api/ingest/{id}/rejected
+    detection.py   # detection run (+ background AI review), alerts, cases, decisions, summary
+    ai_review.py   # AI review endpoints, GET /api/ai/log
+    graph.py       # /api/graph/*, /api/links/{id}
+    masking_router.py  # POST /api/masking/reveal (supervisor, app only)
     audit.py       # GET /api/audit
 ```
+
+Gotcha: models have FKs but no ORM relationships, so SQLAlchemy does not order parent/child
+inserts. Flush parents first (see ingestion customers->accounts, engine alerts->cases).
 
 ## Non-negotiable rules
 
@@ -65,9 +77,8 @@ Resolved from `X-Role` header. Unknown/absent → `analyst`.
 
 ## Current state
 
-- u1-platform functional design: complete (`aidlc/.../construction/u1-platform/functional-design/`)
-- B1 backend: in progress (app/ directory)
-- u2–u5: design pending
+- Backend for Level 1 + MCP: complete with acceptance tests (tests/, 80%+ coverage)
+- Frontend: Upload, Audit, Data Safety done; Dashboard, Alerts, Cases, AI Activity pending
 
 ## Test strategy
 

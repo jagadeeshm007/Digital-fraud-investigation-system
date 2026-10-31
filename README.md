@@ -86,6 +86,35 @@ docker compose up --build       # Postgres + app on http://localhost:8000
 
 The image builds the frontend into `frontend/dist` and sets `SERVE_FRONTEND=1`, so FastAPI serves the bundle at `/`. Compose points `DATABASE_URL` at the local Postgres container; a managed host provides its own `DATABASE_URL` and optional `PORT`.
 
+### Sample data (planted fraud scenarios)
+
+`POST /api/ingest/sample` loads a synthetic Indian retail bank: 150 ordinary customers plus planted stories (suspicious transfer to a new payee, shared-device loan ring with rapid transfers, account takeover, duplicate and cross-customer insurance claims, synthetic identities) and legitimate lookalikes (monthly rent, a household sharing one phone, two mistyped passwords). Then `POST /api/detection/run` as an investigator.
+
+Upload files instead: `python -m app.sample_data sample_data/` writes CSV, XLSX and JSON files plus `99_broken_transactions.csv` to demo the validation report.
+
+### MCP server (Claude, ChatGPT, Gemini)
+
+The app serves an MCP endpoint at `/mcp` (Streamable HTTP). Add it to Claude Code:
+
+```bash
+claude mcp add --transport http dfis http://localhost:8000/mcp --header "X-Role: investigator"
+```
+
+- Read tools: `get_dashboard`, `list_alerts`, `get_alert`, `list_cases`, `get_case`, `get_ai_activity`. Responses are masked like the web API.
+- Write tools: `record_case_decision`, `run_detection`. Each asks the **user** to confirm through an MCP consent prompt first; a client that cannot show the prompt is refused. Every call and consent is in the audit trail with channel `mcp`.
+- The role comes from the `X-Role` header and is checked on the server. There is no reveal tool, so PII never leaves through MCP.
+- For a deployed URL, set `MCP_ALLOWED_HOSTS=<your-host>`.
+- End-to-end check with a real MCP client (start the app first): `python scripts/mcp_e2e.py http://localhost:8000` (19 checks: tools, reads, consent accepted/declined/unsupported, role refusal, no raw PII, DNS-rebinding protection).
+
+### Tests
+
+```bash
+docker run -d --name dfis-pg-test -e POSTGRES_USER=dfis -e POSTGRES_PASSWORD=dfis_ci -e POSTGRES_DB=dfis_test -p 55432:5432 postgres:16-alpine
+pytest --cov=app --cov-fail-under=80
+```
+
+`tests/test_scenarios.py` is the acceptance suite: every planted scenario is flagged, every lookalike is cleared with a reason, and no ordinary customer is flagged.
+
 ### CI
 
 `.github/workflows/ci.yml` runs on every push: Ruff + pytest (with a Postgres service, `FAKE_LLM=1`, coverage floor 80% once `tests/` exists), Vite+ format check, lint, Vitest and build, then a Docker image build.

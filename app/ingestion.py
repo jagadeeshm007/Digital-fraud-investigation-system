@@ -7,12 +7,14 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import pandas as pd
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.exceptions import IngestionError
 from app.models import (
     Account,
+    BeneficiaryChange,
     Customer,
     Device,
     IngestionBatch,
@@ -162,12 +164,35 @@ def _check_columns(rows: list[dict], mandatory_fields: list[str]) -> None:
 Rejection = dict  # {row, field, reason, raw}
 
 
+async def _existing_keys(session: AsyncSession, column) -> set[str]:
+    """Keys already in the database, so a re-upload is a reported duplicate, not a 500."""
+    return set((await session.execute(select(column))).scalars().all())
+
+
+def _check_new(key: str, seen: set[str], existing: set[str], field: str) -> None:
+    if key in seen:
+        raise IngestionError("duplicate", f"Duplicate key {key}", field)
+    if key in existing:
+        raise IngestionError("duplicate", f"Duplicate key {key} (already loaded)", field)
+    seen.add(key)
+
+
+def _check_customer(cid: str, known: set[str]) -> None:
+    # ponytail: unknown customers are rejected, not warned — the FK on these tables needs the customer row first.
+    if cid not in known:
+        raise IngestionError(
+            "unknown_reference", f"Unknown customer {cid}: load customer profiles first", "customer_id"
+        )
+
+
 async def _write_customers_accounts(
     session: AsyncSession, rows: list[dict]
 ) -> tuple[int, list[Rejection], int]:
     accepted, rejected = 0, []
-    seen_c: set[str] = set()
+    existing_c = await _existing_keys(session, Customer.customer_id)
+    existing_a = await _existing_keys(session, Account.account_id)
     seen_a: set[str] = set()
+    accounts: list[Account] = []  # added after customers are flushed (FK order)
 
     for i, row in enumerate(rows, 1):
         raw = dict(row)
@@ -176,36 +201,40 @@ async def _write_customers_accounts(
                            "address", "identity_number", "onboarded_at", "source_system",
                            "account_id", "product", "opened_at", "status"])
             cid, aid = str(row["customer_id"]), str(row["account_id"])
+            _check_new(aid, seen_a, existing_a, "account_id")
 
-            if cid in seen_c:
-                raise IngestionError("duplicate", f"Duplicate key {cid}", "customer_id")
-            if aid in seen_a:
-                raise IngestionError("duplicate", f"Duplicate key {aid}", "account_id")
-            seen_c.add(cid)
-            seen_a.add(aid)
-
-            session.add(Customer(
-                customer_id=cid,
-                name=str(row["name"]),
-                date_of_birth=_date(row["date_of_birth"], "date_of_birth"),
-                phone=str(row["phone"]),
-                email=str(row["email"]),
-                address=str(row["address"]),
-                identity_number=str(row["identity_number"]),
-                onboarded_at=_datetime_tz(row["onboarded_at"], "onboarded_at"),
-                source_system=str(row["source_system"]),
-            ))
-            session.add(Account(
+            # Parse everything before adding anything, so a bad row leaves no partial customer.
+            account = Account(
                 account_id=aid,
                 customer_id=cid,
                 product=str(row["product"]),
                 opened_at=_datetime_tz(row["opened_at"], "opened_at"),
                 status=_enum(row["status"], {"active", "suspended", "closed"}, "status"),
-            ))
+            )
+            customer = None
+            if cid not in existing_c:  # one customer may own several accounts
+                customer = Customer(
+                    customer_id=cid,
+                    name=str(row["name"]),
+                    date_of_birth=_date(row["date_of_birth"], "date_of_birth"),
+                    phone=str(row["phone"]),
+                    email=str(row["email"]),
+                    address=str(row["address"]),
+                    identity_number=str(row["identity_number"]),
+                    onboarded_at=_datetime_tz(row["onboarded_at"], "onboarded_at"),
+                    source_system=str(row["source_system"]),
+                )
+            if customer is not None:
+                session.add(customer)
+                existing_c.add(cid)
+            accounts.append(account)
             accepted += 1
         except IngestionError as e:
             rejected.append({"row": i, "field": e.field, "reason": e.detail, "raw": raw})
 
+    # No ORM relationships, so SQLAlchemy won't order parent-before-child inserts on its own.
+    await session.flush()
+    session.add_all(accounts)
     return accepted, rejected, 0
 
 
@@ -214,6 +243,8 @@ async def _write_transactions(
 ) -> tuple[int, list[Rejection], int]:
     accepted, rejected, warnings = 0, [], 0
     seen: set[str] = set()
+    existing = await _existing_keys(session, Transaction.transaction_id)
+    known_accounts = await _existing_keys(session, Account.account_id)
     CHANNELS = {"upi", "neft", "imps", "rtgs", "atm", "branch", "online"}
     STATUSES = {"success", "failed", "pending", "reversed"}
 
@@ -222,9 +253,9 @@ async def _write_transactions(
         try:
             _require(row, ["transaction_id", "timestamp", "sender_account_id", "amount_inr", "channel", "status"])
             tid = str(row["transaction_id"])
-            if tid in seen:
-                raise IngestionError("duplicate", f"Duplicate key {tid}", "transaction_id")
-            seen.add(tid)
+            _check_new(tid, seen, existing, "transaction_id")
+            if str(row["sender_account_id"]) not in known_accounts:
+                warnings += 1  # FR1.6: unknown reference is a warning, the row still loads
 
             session.add(Transaction(
                 transaction_id=tid,
@@ -250,36 +281,50 @@ async def _write_devices_logins(
 ) -> tuple[int, list[Rejection], int]:
     accepted, rejected = 0, []
     seen_events: set[str] = set()
-    seen_devices: set[str] = set()
+    existing = await _existing_keys(session, LoginEvent.event_id)
+    known_devices = await _existing_keys(session, Device.device_id)
+    known_customers = await _existing_keys(session, Customer.customer_id)
     OUTCOMES = {"success", "failure", "blocked"}
-    EVENT_TYPES = {"login", "logout", "password_reset", "device_register"}
+    EVENT_TYPES = {
+        "login", "logout", "password_reset", "device_register", "beneficiary_add", "profile_change",
+    }
 
     for i, row in enumerate(rows, 1):
         raw = dict(row)
         try:
             _require(row, ["event_id", "customer_id", "timestamp", "outcome", "event_type"])
-            eid = str(row["event_id"])
-            if eid in seen_events:
-                raise IngestionError("duplicate", f"Duplicate key {eid}", "event_id")
-            seen_events.add(eid)
+            eid, cid = str(row["event_id"]), str(row["customer_id"])
+            _check_new(eid, seen_events, existing, "event_id")
+            _check_customer(cid, known_customers)
 
             ts = _datetime_tz(row["timestamp"], "timestamp")
             did = _str(row, "device_id")
-            if did and did not in seen_devices:
-                seen_devices.add(did)
-                first_seen = _datetime_tz(row["first_seen_at"], "first_seen_at") if row.get("first_seen_at") else ts
-                session.add(Device(device_id=did, first_seen_at=first_seen))
-
-            session.add(LoginEvent(
+            event = LoginEvent(
                 event_id=eid,
-                customer_id=str(row["customer_id"]),
+                customer_id=cid,
                 timestamp=ts,
                 device_id=did,
                 ip_address=_str(row, "ip_address"),
                 location=_str(row, "location"),
                 outcome=_enum(row["outcome"], OUTCOMES, "outcome"),
                 event_type=_enum(row["event_type"], EVENT_TYPES, "event_type"),
-            ))
+            )
+            # A beneficiary_add event also records the new payee, which R1/R3 use.
+            ben = None
+            if event.event_type == "beneficiary_add":
+                _require(row, ["payee_account_id"])
+                ben = BeneficiaryChange(
+                    change_id=eid, customer_id=cid,
+                    payee_account_id=str(row["payee_account_id"]), changed_at=ts,
+                )
+
+            if did and did not in known_devices:
+                known_devices.add(did)
+                first_seen = _datetime_tz(row["first_seen_at"], "first_seen_at") if row.get("first_seen_at") else ts
+                session.add(Device(device_id=did, first_seen_at=first_seen))
+            session.add(event)
+            if ben is not None:
+                session.add(ben)
             accepted += 1
         except IngestionError as e:
             rejected.append({"row": i, "field": e.field, "reason": e.detail, "raw": raw})
@@ -292,6 +337,8 @@ async def _write_loan_applications(
 ) -> tuple[int, list[Rejection], int]:
     accepted, rejected = 0, []
     seen: set[str] = set()
+    existing = await _existing_keys(session, LoanApplication.application_id)
+    known_customers = await _existing_keys(session, Customer.customer_id)
     STATUSES = {"pending", "approved", "rejected", "disbursed"}
 
     for i, row in enumerate(rows, 1):
@@ -299,9 +346,8 @@ async def _write_loan_applications(
         try:
             _require(row, ["application_id", "customer_id", "applied_at", "amount_inr", "status"])
             aid = str(row["application_id"])
-            if aid in seen:
-                raise IngestionError("duplicate", f"Duplicate key {aid}", "application_id")
-            seen.add(aid)
+            _check_new(aid, seen, existing, "application_id")
+            _check_customer(str(row["customer_id"]), known_customers)
 
             amount = _decimal(row["amount_inr"], "amount_inr")
             if amount <= 0:
@@ -331,15 +377,16 @@ async def _write_insurance_claims(
 ) -> tuple[int, list[Rejection], int]:
     accepted, rejected = 0, []
     seen: set[str] = set()
+    existing = await _existing_keys(session, InsuranceClaim.claim_id)
+    known_customers = await _existing_keys(session, Customer.customer_id)
 
     for i, row in enumerate(rows, 1):
         raw = dict(row)
         try:
             _require(row, ["claim_id", "policy_id", "customer_id", "incident_date", "claim_date", "claim_type", "amount_inr"])
             cid = str(row["claim_id"])
-            if cid in seen:
-                raise IngestionError("duplicate", f"Duplicate key {cid}", "claim_id")
-            seen.add(cid)
+            _check_new(cid, seen, existing, "claim_id")
+            _check_customer(str(row["customer_id"]), known_customers)
 
             amount = _decimal(row["amount_inr"], "amount_inr")
             if amount <= 0:
@@ -407,6 +454,7 @@ async def ingest(
         warning_count=warning_count,
     )
     session.add(batch)
+    await session.flush()  # batch row before its rejected records (FK order)
 
     for r in rejected_rows:
         session.add(RejectedRecord(
