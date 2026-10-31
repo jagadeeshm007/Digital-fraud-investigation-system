@@ -15,6 +15,7 @@ dependencies = [
     "pandas>=2.2",
     "openpyxl>=3.1",
     "python-multipart>=0.0.12",
+    "groq>=0.9",
 ]
 
 [tool.ruff]

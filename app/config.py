@@ -10,5 +10,10 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 50
     log_level: str = "INFO"
 
+    # AI review (Groq — migrate to OpenRouter later)
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.1-8b-instant"
+    fake_llm: bool = False  # FAKE_LLM=1 in CI
+
 
 settings = Settings()
