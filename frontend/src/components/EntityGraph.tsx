@@ -14,15 +14,6 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import {
-  forceCenter,
-  forceCollide,
-  forceLink,
-  forceManyBody,
-  forceSimulation,
-  type SimulationLinkDatum,
-  type SimulationNodeDatum,
-} from 'd3-force'
-import {
   ArrowLeftRightIcon,
   CreditCardIcon,
   FileTextIcon,
@@ -43,7 +34,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { getGraph, type EntityGraphData, type GraphNodeType } from '@/lib/api'
 
 // EntityGraph per inception/refined-mockups/interaction-spec.md: typed nodes with masked labels,
-// edges for shared identifiers, d3-force layout, and a keyboard-reachable text list of the links.
+// edges for shared identifiers, a layered left-to-right layout, and a keyboard-reachable text list of the links.
 // Data comes from GET /api/graph/alert/{id} and /api/graph/entity/{id} (app/graph/builder.py).
 
 const TYPE_META: Record<GraphNodeType, { label: string; icon: typeof UserIcon }> = {
@@ -64,25 +55,57 @@ const HUB_TYPES = new Set<GraphNodeType>(['device', 'ip_address'])
 
 const humanize = (s: string) => s.replaceAll('_', ' ')
 
-type SimNode = SimulationNodeDatum & { id: string }
+// Layered layout: the focus entity in column 0, its direct links in column 1, and so on.
+// Fixed-size cards and wide column gaps keep nodes apart and leave room for edge labels.
+const NODE_W = 196
+const COL_GAP = 300
+const ROW_GAP = 72
 
-/** Runs d3-force to completion synchronously; the focus entity is pinned at the centre. */
-function layout(data: EntityGraphData, focus: string): Map<string, { x: number; y: number }> {
-  const simNodes: SimNode[] = data.nodes.map((n) => ({ id: n.id, ...(n.id === focus ? { fx: 0, fy: 0 } : {}) }))
-  const simLinks: SimulationLinkDatum<SimNode>[] = data.edges.map((e) => ({ source: e.source, target: e.target }))
-  const sim = forceSimulation(simNodes)
-    .force(
-      'link',
-      forceLink<SimNode, SimulationLinkDatum<SimNode>>(simLinks)
-        .id((d) => d.id)
-        .distance(130),
+function layout(
+  data: EntityGraphData,
+  focus: string,
+): { pos: Map<string, { x: number; y: number }>; depth: Map<string, number> } {
+  const adj = new Map<string, string[]>(data.nodes.map((n) => [n.id, []]))
+  for (const e of data.edges) {
+    adj.get(e.source)?.push(e.target)
+    adj.get(e.target)?.push(e.source)
+  }
+  const depth = new Map<string, number>()
+  const queue = adj.has(focus) ? [focus] : []
+  if (queue.length) depth.set(focus, 0)
+  for (let i = 0; i < queue.length; i++) {
+    for (const nb of adj.get(queue[i]) ?? []) {
+      if (!depth.has(nb)) {
+        depth.set(nb, depth.get(queue[i])! + 1)
+        queue.push(nb)
+      }
+    }
+  }
+  const last = Math.max(0, ...depth.values()) + 1
+  for (const n of data.nodes) if (!depth.has(n.id)) depth.set(n.id, last) // unreachable: own column
+
+  const typeOf = new Map(data.nodes.map((n) => [n.id, n.type]))
+  const columns: string[][] = []
+  for (const n of data.nodes) (columns[depth.get(n.id)!] ??= []).push(n.id)
+
+  // Order each column by the average row of its neighbours in the previous column (fewer crossings).
+  const row = new Map<string, number>()
+  columns.forEach((col, d) => {
+    const score = (id: string) => {
+      const prev = (adj.get(id) ?? []).filter((nb) => depth.get(nb) === d - 1).map((nb) => row.get(nb) ?? 0)
+      return prev.length ? prev.reduce((a, b) => a + b, 0) / prev.length : 0
+    }
+    col.sort(
+      (a, b) => score(a) - score(b) || String(typeOf.get(a)).localeCompare(String(typeOf.get(b))) || a.localeCompare(b),
     )
-    .force('charge', forceManyBody().strength(-600))
-    .force('collide', forceCollide(65))
-    .force('center', forceCenter(0, 0))
-    .stop()
-  sim.tick(300)
-  return new Map(simNodes.map((n) => [n.id, { x: n.x ?? 0, y: n.y ?? 0 }]))
+    col.forEach((id, i) => row.set(id, i))
+  })
+
+  const pos = new Map<string, { x: number; y: number }>()
+  columns.forEach((col, d) =>
+    col.forEach((id, i) => pos.set(id, { x: d * COL_GAP, y: (i - (col.length - 1) / 2) * ROW_GAP })),
+  )
+  return { pos, depth }
 }
 
 /** Device / IP nodes with 3+ links, or reaching 2+ customers directly or via one record. */
@@ -115,10 +138,14 @@ function EntityNode({ data }: NodeProps<Node<EntityNodeData>>) {
   const Icon = meta.icon
   const ring = data.focus ? 'border-primary ring-2 ring-mint' : data.hub ? 'border-warning ring-2 ring-warning/30' : ''
   return (
-    <div className={`flex items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5 shadow-xs ${ring}`}>
-      {/* Edges run centre to centre, so both handles sit invisibly in the middle. */}
-      <Handle type="target" position={Position.Top} className="!top-1/2 !left-1/2 !opacity-0" isConnectable={false} />
-      <Handle type="source" position={Position.Top} className="!top-1/2 !left-1/2 !opacity-0" isConnectable={false} />
+    <div
+      className={`flex items-center gap-2 rounded-lg border bg-card px-2.5 py-1.5 shadow-xs ${ring}`}
+      style={{ width: NODE_W }}
+      title={`${meta.label}: ${data.label}`}
+    >
+      {/* Edges enter on the left and leave on the right, so they run between columns, not across cards. */}
+      <Handle type="target" position={Position.Left} className="!opacity-0" isConnectable={false} />
+      <Handle type="source" position={Position.Right} className="!opacity-0" isConnectable={false} />
       <span
         className={`rounded-md p-1 ${
           data.focus ? 'bg-primary text-primary-foreground' : data.type === 'alert' ? 'bg-destructive/15' : 'bg-muted'
@@ -126,8 +153,8 @@ function EntityNode({ data }: NodeProps<Node<EntityNodeData>>) {
       >
         <Icon className="size-4" aria-hidden />
       </span>
-      <span className="max-w-36 leading-tight">
-        <span className="block text-[10px] text-muted-foreground uppercase tracking-wide">
+      <span className="min-w-0 flex-1 leading-tight">
+        <span className="block truncate text-[10px] text-muted-foreground uppercase tracking-wide">
           {meta.label}
           {data.band && ` · ${data.band}`}
         </span>
@@ -186,7 +213,7 @@ export default function EntityGraph({ alertId }: { alertId: string }) {
 
   const { nodes, edges } = useMemo<{ nodes: Node<EntityNodeData>[]; edges: Edge[] }>(() => {
     if (!graph) return { nodes: [], edges: [] }
-    const positions = layout(graph, centre)
+    const { pos: positions, depth } = layout(graph, centre)
     const hubs = sharedHubs(graph)
     const showLabels = graph.edges.length <= 30
     return {
@@ -194,7 +221,7 @@ export default function EntityGraph({ alertId }: { alertId: string }) {
         id: n.id,
         type: 'entity',
         position: positions.get(n.id) ?? { x: 0, y: 0 },
-        origin: [0.5, 0.5] as [number, number],
+        origin: [0, 0.5] as [number, number],
         data: {
           type: n.type,
           label: String(n.data.label ?? n.id),
@@ -206,15 +233,19 @@ export default function EntityGraph({ alertId }: { alertId: string }) {
       edges: graph.edges.map((e) => {
         const loud = hubs.has(e.source) || hubs.has(e.target)
         const active = highlight === e.id
+        // Draw every edge left to right; the text list keeps the original direction.
+        const flip = (depth.get(e.source) ?? 0) > (depth.get(e.target) ?? 0)
         return {
           id: e.id,
-          source: e.source,
-          target: e.target,
-          type: 'straight',
+          source: flip ? e.target : e.source,
+          target: flip ? e.source : e.target,
+          type: 'default',
           label: showLabels || active ? humanize(e.label) : undefined,
           animated: active,
-          labelStyle: { fontSize: 10 },
+          labelStyle: { fontSize: 10, fill: 'var(--color-muted-foreground)' },
+          labelBgStyle: { fill: 'var(--color-card)' },
           labelBgPadding: [4, 2] as [number, number],
+          labelBgBorderRadius: 4,
           style: {
             stroke: loud
               ? 'var(--color-warning)'
@@ -283,6 +314,9 @@ export default function EntityGraph({ alertId }: { alertId: string }) {
             fitView
             fitViewOptions={{ padding: 0.15 }}
             minZoom={0.1}
+            // The mouse wheel scrolls the page; zoom with the controls or a pinch.
+            zoomOnScroll={false}
+            preventScrolling={false}
             proOptions={{ hideAttribution: true }}
             aria-label="Entity graph"
           >
