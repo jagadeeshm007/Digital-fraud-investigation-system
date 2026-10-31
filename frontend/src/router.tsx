@@ -1,5 +1,6 @@
 import { createBrowserRouter } from 'react-router'
 import AppShell from '@/components/AppShell'
+import AlertsPage from '@/pages/AlertsPage'
 import AuditPage from '@/pages/AuditPage'
 import DataSafetyPage from '@/pages/DataSafetyPage'
 import PlaceholderPage from '@/pages/PlaceholderPage'
@@ -12,7 +13,12 @@ export const routes = [
     children: [
       { index: true, element: <PlaceholderPage title="Dashboard" bolt="B2" /> },
       { path: 'upload', element: <UploadPage /> },
-      { path: 'alerts', element: <PlaceholderPage title="Alerts" bolt="B2" /> },
+      { path: 'alerts', element: <AlertsPage /> },
+      {
+        // React Flow is heavy; load it only when an alert is opened.
+        path: 'alerts/:alertId',
+        lazy: () => import('@/pages/AlertDetailPage').then((m) => ({ Component: m.default })),
+      },
       { path: 'cases', element: <PlaceholderPage title="Cases" bolt="B2" /> },
       { path: 'ai-activity', element: <PlaceholderPage title="AI Activity" bolt="B3" /> },
       { path: 'data-safety', element: <DataSafetyPage /> },

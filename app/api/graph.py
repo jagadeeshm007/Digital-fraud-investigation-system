@@ -174,11 +174,11 @@ async def links_for_entity(
             })
 
     _collect(device_idx, "device", lambda v: v)          # device IDs are not PII
-    _collect(ip_idx, "ip_address", mask)
-    _collect(phone_idx, "phone", mask)
+    _collect(ip_idx, "ip_address", lambda v: mask(v, "ip_address"))
+    _collect(phone_idx, "phone", lambda v: mask(v, "phone"))
     _collect(payee_idx, "payee_account", lambda v: v)     # account IDs are opaque
-    _collect(cust_phone_idx, "customer_phone", mask)
-    _collect(cust_email_idx, "customer_email", mask)
+    _collect(cust_phone_idx, "customer_phone", lambda v: mask(v, "phone"))
+    _collect(cust_email_idx, "customer_email", lambda v: mask(v, "email"))
 
     return {
         "entity_id": entity_id,

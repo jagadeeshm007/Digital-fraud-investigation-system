@@ -60,6 +60,93 @@ export function ingestFile(file: File, sourceType: SourceType): Promise<Ingestio
   return apiFetch<IngestionBatch>('/ingest', { method: 'POST', body: form })
 }
 
+export type RiskBand = 'High' | 'Medium' | 'Low'
+
+export interface AlertFactor {
+  factor: string
+  points: number
+  evidence_id?: string
+}
+
+export interface Alert {
+  alert_id: string
+  rule_id: string
+  fraud_category: string
+  entity_type: string
+  entity_id: string
+  customer_id: string | null
+  product: string | null
+  detected_at: string
+  base_score: number
+  ai_adjustment: number
+  final_score: number
+  risk_band: RiskBand
+  factors: AlertFactor[]
+  ai_recommendation: string | null
+  ai_status: string
+  status: string
+  cleared_reason: string | null
+}
+
+export interface Paged<T> {
+  items: T[]
+  page: number
+  page_size: number
+  total: number
+}
+
+export function getAlerts(params: Record<string, string | number | undefined>): Promise<Paged<Alert>> {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') qs.set(k, String(v))
+  return apiFetch<Paged<Alert>>(`/alerts?${qs}`)
+}
+
+export function getAlert(alertId: string): Promise<Alert> {
+  return apiFetch<Alert>(`/alerts/${encodeURIComponent(alertId)}`)
+}
+
+export function runDetection(): Promise<{
+  new_alerts: number
+  new_cases: number
+  cleared_count: number
+  total_hits: number
+}> {
+  return apiFetch('/detection/run', { method: 'POST' })
+}
+
+// LinkGraph contract (contract-summary.md: GET /api/links/{entity_id}, EntityLink).
+export type EntityType = 'customer' | 'account' | 'device' | 'application' | 'claim'
+
+export interface GraphNode {
+  key: string
+  type: EntityType
+  id: string
+  hops: number
+  is_focus: boolean
+}
+
+export interface EntityLink {
+  link_id: string
+  from_type: EntityType
+  from_id: string
+  to_type: EntityType
+  to_id: string
+  shared_attribute: string
+  shared_value_masked: string | null
+  count: number
+}
+
+export interface LinkGraph {
+  entity_id: string
+  nodes: GraphNode[]
+  links: EntityLink[]
+  truncated: boolean
+}
+
+export function getLinks(entityId: string, depth = 2): Promise<LinkGraph> {
+  return apiFetch<LinkGraph>(`/links/${encodeURIComponent(entityId)}?depth=${depth}`)
+}
+
 export interface AuditEntry {
   audit_id: string
   timestamp: string
