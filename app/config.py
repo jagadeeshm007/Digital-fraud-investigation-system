@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"  # override with GROQ_MODEL env
     fake_llm: bool = False  # FAKE_LLM=1 in CI
+    ai_budget_usd: float = 10.0  # hard cap on estimated AI spend (NFR8)
+    ai_review_batch: int = 25
+    mcp_allowed_hosts: str = ""  # extra Host headers for /mcp, e.g. "dfis.onrender.com"  # alerts reviewed in the background after each detection run
 
 
 settings = Settings()

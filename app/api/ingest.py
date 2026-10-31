@@ -6,6 +6,7 @@ from app.audit import write_audit
 from app.db import get_session
 from app.exceptions import IngestionError, PermissionDenied
 from app.ingestion import ingest
+from app.masking import mask_dict
 from app.models import IngestionBatch, RejectedRecord
 from app.permissions import check_permission, resolve_role
 
@@ -76,8 +77,40 @@ async def get_rejected(
                 "row_number": r.row_number,
                 "field": r.field,
                 "reason": r.reason,
-                "raw_values": r.raw_values,
+                "raw_values": mask_dict(r.raw_values or {}),  # rejected rows still hold PII
             }
             for r in records
         ],
     }
+
+
+@router.post("/ingest/sample")
+async def load_sample_data(
+    x_role: str | None = Header(default=None, alias="X-Role"),
+    session: AsyncSession = Depends(get_session),
+):
+    """US1.2: load the bundled synthetic data (all five sources, planted scenarios) in one click."""
+    import json
+
+    from app.sample_data import SOURCE_ORDER, build
+
+    role = resolve_role(x_role)
+    try:
+        check_permission(role, "upload_file")
+    except PermissionDenied as e:
+        raise HTTPException(403, detail=str(e))
+
+    rows = build()
+    batches = []
+    for source in SOURCE_ORDER:
+        batch = await ingest(json.dumps(rows[source]).encode(), f"sample_{source}.json", source, session)
+        await write_audit(session, role, "app", "upload_file", batch.batch_id, "allowed")
+        await session.commit()
+        batches.append({
+            "batch_id": batch.batch_id,
+            "source_type": source,
+            "accepted_count": batch.accepted_count,
+            "rejected_count": batch.rejected_count,
+            "warning_count": batch.warning_count,
+        })
+    return {"batches": batches}

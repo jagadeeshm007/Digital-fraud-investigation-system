@@ -170,7 +170,7 @@ async def build_graph(session: AsyncSession) -> EntityGraph:
             _ensure_device(g, ev.device_id)
             g.add_edge(ev.event_id, ev.device_id, "used_device")
         if ev.ip_address:
-            masked_ip = mask(ev.ip_address, "ip_address")  # IP is PII: never in ids or labels
+            masked_ip = mask(ev.ip_address, "ip_address")  # raw IP is PII — never a node id or label
             ip_node_id = f"ip:{masked_ip}"
             if ip_node_id not in g.nodes:
                 g.add_node(GNode(id=ip_node_id, node_type="ip_address", data={"label": masked_ip}))

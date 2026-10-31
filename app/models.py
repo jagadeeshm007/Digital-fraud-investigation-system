@@ -199,3 +199,33 @@ class CaseHistory(Base):
     to_status: Mapped[str] = mapped_column(String)
     decision: Mapped[str] = mapped_column(String)
     reason: Mapped[str] = mapped_column(String)
+
+
+class AiCallLog(Base):
+    """One row per AI review call (FR10.1). prompt_masked holds exactly what the model saw."""
+    __tablename__ = "ai_call_log"
+    call_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    alert_id: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), default=Decimal("0"))
+    outcome: Mapped[str] = mapped_column(String)  # completed | unavailable | fake
+    prompt_masked: Mapped[str] = mapped_column(String)
+
+
+class ConsentRequest(Base):
+    """MCP write consent (FR11.2): a write runs only when outcome == 'accepted'."""
+    __tablename__ = "consent_requests"
+    consent_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tool: Mapped[str] = mapped_column(String)
+    arguments: Mapped[dict] = mapped_column(JSON)
+    role: Mapped[str] = mapped_column(String)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    outcome: Mapped[str] = mapped_column(String)  # accepted | declined | cancelled | unsupported

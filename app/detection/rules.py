@@ -11,6 +11,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.masking import mask
 from app.models import (
     Account,
     BeneficiaryChange,
@@ -214,11 +215,13 @@ async def r2_shared_device(session: AsyncSession) -> list[DetectionHit]:
         if loan.device_id:
             device_customers[loan.device_id].add(loan.customer_id)
 
-    # ip -> set of customer_ids (from logins)
+    # ip -> set of customer_ids (from logins); keep one login event per IP as evidence (raw IP is PII)
     ip_customers: dict[str, set[str]] = defaultdict(set)
+    ip_evidence: dict[str, str] = {}
     for ev in logins:
         if ev.ip_address:
             ip_customers[ev.ip_address].add(ev.customer_id)
+            ip_evidence.setdefault(ev.ip_address, ev.event_id)
 
     hits: list[DetectionHit] = []
 
@@ -282,9 +285,9 @@ async def r2_shared_device(session: AsyncSession) -> list[DetectionHit]:
             entity_id=next(iter(cids)),
             customer_id=next(iter(cids)),
             factors=[{
-                "factor": f"IP address {ip} used by {len(cids)} different customers",
+                "factor": f"IP address {mask(ip, 'ip_address')} used by {len(cids)} different customers",
                 "points": 20,
-                "evidence_id": ip,
+                "evidence_id": ip_evidence[ip],
             }],
             base_score=20,
             product="banking",
@@ -350,10 +353,12 @@ async def r3_ato(session: AsyncSession) -> list[DetectionHit]:
 
             # Look for success within 30 min of last failure
             last_failure = failures[-1]
+            # The success can sit inside the scanned window (it usually does), so search from
+            # the first failure onward rather than only after the window.
             success = next(
-                (e for e in events[j:] if
-                 e.outcome == "success" and
-                 (e.timestamp - last_failure.timestamp) <= timedelta(minutes=30)),
+                (e for e in events[i + 1:] if
+                 e.outcome == "success" and e.event_type == "login" and
+                 timedelta(0) < (e.timestamp - last_failure.timestamp) <= timedelta(minutes=30)),
                 None,
             )
 
@@ -493,7 +498,7 @@ async def r4_loan_ring(session: AsyncSession) -> list[DetectionHit]:
 
     for phone, cids in phone_custs.items():
         if len(cids) >= 2:
-            _add_ring_hit(phone, cids, f"Loan applications from {len(cids)} customers share phone {phone[-4:]}")
+            _add_ring_hit(phone, cids, f"Loan applications from {len(cids)} customers share phone {mask(phone, 'phone')}")
 
     for addr, cids in addr_custs.items():
         if len(cids) >= 2:

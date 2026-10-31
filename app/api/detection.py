@@ -1,25 +1,55 @@
+import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import write_audit
+from app.config import settings
 from app.db import get_session
 from app.detection.engine import run_detection
+from app.evidence import load_evidence
 from app.exceptions import PermissionDenied
-from app.models import Alert, Case, CaseHistory
+from app.models import (
+    Account,
+    Alert,
+    Case,
+    CaseHistory,
+    Customer,
+    InsuranceClaim,
+    LoanApplication,
+    LoginEvent,
+    Transaction,
+)
 from app.permissions import check_permission, resolve_role
 
+log = logging.getLogger(__name__)
 router = APIRouter(tags=["detection"])
+
+IST = timezone(timedelta(hours=5, minutes=30))
+_SOURCE_TABLES = (Customer, Account, Transaction, LoginEvent, LoanApplication, InsuranceClaim)
 
 
 # ─── POST /api/detection/run ─────────────────────────────────────────────────
 
+async def _review_in_background(alert_ids: list[str]) -> None:
+    # Own session: the request's session is closed once the response is sent.
+    from app.api.ai_review import review_pending
+    from app.db import async_session
+
+    async with async_session() as session:
+        try:
+            await review_pending(session, alert_ids, limit=settings.ai_review_batch)
+        except Exception:  # never let AI failure surface as a detection failure (NFR6)
+            log.exception("background AI review failed")
+
+
 @router.post("/detection/run")
 async def trigger_detection(
+    background: BackgroundTasks,
     x_role: str | None = Header(default=None, alias="X-Role"),
     session: AsyncSession = Depends(get_session),
 ):
@@ -30,6 +60,8 @@ async def trigger_detection(
         raise HTTPException(403, detail=str(e))
 
     result = await run_detection(session, triggered_by=role)
+    if result["review_alert_ids"]:
+        background.add_task(_review_in_background, result["review_alert_ids"])
     return result
 
 
@@ -38,10 +70,14 @@ async def trigger_detection(
 @router.get("/alerts")
 async def list_alerts(
     customer_id: str | None = Query(default=None),
+    transaction_id: str | None = Query(default=None),
     risk_band: str | None = Query(default=None),
     fraud_category: str | None = Query(default=None),
+    rule_id: str | None = Query(default=None),
     product: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     x_role: str | None = Header(default=None, alias="X-Role"),
@@ -64,6 +100,19 @@ async def list_alerts(
         q = q.where(Alert.product == product)
     if status:
         q = q.where(Alert.status == status)
+    if rule_id:
+        q = q.where(Alert.rule_id == rule_id)
+    if transaction_id:
+        # the transaction is either the flagged entity or cited as evidence in a factor
+        q = q.where(or_(
+            Alert.entity_id == transaction_id,
+            cast(Alert.factors, String).contains(f'"{transaction_id}"'),
+        ))
+    # Day boundaries in IST, since the bank data is Indian (requirements assumption)
+    if date_from:
+        q = q.where(Alert.detected_at >= datetime.combine(date_from, time.min, IST))
+    if date_to:
+        q = q.where(Alert.detected_at < datetime.combine(date_to + timedelta(days=1), time.min, IST))
 
     total = (await session.execute(
         select(func.count()).select_from(q.subquery())
@@ -98,7 +147,10 @@ async def get_alert(
     if not alert:
         raise HTTPException(404, detail="Alert not found")
 
-    return _alert_dict(alert)
+    case_id = (await session.execute(
+        select(Case.case_id).where(Case.alert_id == alert_id)
+    )).scalar_one_or_none()
+    return {**_alert_dict(alert), "case_id": case_id, "evidence": await load_evidence(session, alert)}
 
 
 # ─── GET /api/cases ──────────────────────────────────────────────────────────
@@ -191,6 +243,45 @@ _DECISION_PERMISSION = {
 }
 
 
+class DecisionError(Exception):
+    def __init__(self, status: int, detail: str):
+        self.status = status
+        self.detail = detail
+        super().__init__(detail)
+
+
+async def record_case_decision(
+    session: AsyncSession, case_id: str, decision: str, reason: str, role: str, channel: str
+) -> Case:
+    """Shared by the web API and the MCP gateway, so both enforce the same rules (ADR-006)."""
+    if decision not in _VALID_DECISIONS:
+        raise DecisionError(400, f"decision must be one of {sorted(_VALID_DECISIONS)}")
+    if not reason or not reason.strip():
+        raise DecisionError(400, "A reason is required")
+    check_permission(role, _DECISION_PERMISSION[decision])  # PermissionDenied -> 403
+
+    case = (await session.execute(select(Case).where(Case.case_id == case_id))).scalar_one_or_none()
+    if not case:
+        raise DecisionError(404, "Case not found")
+    if case.status in ("closed", "escalated"):
+        raise DecisionError(409, f"Case is already {case.status}")
+
+    from_status, to_status = case.status, _DECISION_STATUS_MAP[decision]
+    now = datetime.now(timezone.utc)
+    session.add(CaseHistory(
+        history_id=str(uuid.uuid4()), case_id=case_id, changed_at=now, changed_by=role,
+        from_status=from_status, to_status=to_status, decision=decision, reason=reason,
+    ))
+    case.status = to_status
+    case.updated_at = now
+    await write_audit(
+        session, role=role, channel=channel, action="record_case_decision",
+        target=case_id, result=f"{decision}: {reason[:80]}",
+    )
+    await session.commit()
+    return case
+
+
 @router.patch("/cases/{case_id}/decision")
 async def record_decision(
     case_id: str,
@@ -199,53 +290,12 @@ async def record_decision(
     session: AsyncSession = Depends(get_session),
 ):
     role = resolve_role(x_role)
-
-    if body.decision not in _VALID_DECISIONS:
-        raise HTTPException(400, detail=f"decision must be one of {sorted(_VALID_DECISIONS)}")
-
-    required_perm = _DECISION_PERMISSION[body.decision]
     try:
-        check_permission(role, required_perm)
+        case = await record_case_decision(session, case_id, body.decision, body.reason, role, "api")
     except PermissionDenied as e:
         raise HTTPException(403, detail=str(e))
-
-    case = (await session.execute(
-        select(Case).where(Case.case_id == case_id)
-    )).scalar_one_or_none()
-    if not case:
-        raise HTTPException(404, detail="Case not found")
-
-    if case.status in ("closed", "escalated"):
-        raise HTTPException(409, detail=f"Case is already {case.status}")
-
-    from_status = case.status
-    to_status = _DECISION_STATUS_MAP[body.decision]
-
-    history = CaseHistory(
-        history_id=str(uuid.uuid4()),
-        case_id=case_id,
-        changed_at=datetime.now(timezone.utc),
-        changed_by=role,
-        from_status=from_status,
-        to_status=to_status,
-        decision=body.decision,
-        reason=body.reason,
-    )
-    session.add(history)
-
-    case.status = to_status
-    case.updated_at = datetime.now(timezone.utc)
-
-    await write_audit(
-        session,
-        role=role,
-        channel="api",
-        action="record_case_decision",
-        target=case_id,
-        result=f"{body.decision}: {body.reason[:80]}",
-    )
-
-    await session.commit()
+    except DecisionError as e:
+        raise HTTPException(e.status, detail=e.detail)
     return _case_dict(case)
 
 
@@ -264,6 +314,9 @@ async def detection_summary(
 
     alerts = (await session.execute(select(Alert))).scalars().all()
     cases = (await session.execute(select(Case))).scalars().all()
+    processed = 0
+    for model in _SOURCE_TABLES:
+        processed += (await session.execute(select(func.count()).select_from(model))).scalar_one()
 
     open_alerts = [a for a in alerts if a.status == "open"]
     cleared_alerts = [a for a in alerts if a.status == "cleared"]
@@ -279,6 +332,8 @@ async def detection_summary(
         case_status_counts[c.status] = case_status_counts.get(c.status, 0) + 1
 
     return {
+        "processed_records": processed,
+        "flagged_events": len(open_alerts),
         "total_alerts": len(alerts),
         "open_alerts": len(open_alerts),
         "cleared_alerts": len(cleared_alerts),

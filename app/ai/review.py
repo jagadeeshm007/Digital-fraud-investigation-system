@@ -6,6 +6,7 @@ Migrate to OpenRouter: swap AsyncGroq for AsyncOpenAI(base_url=...) + update mod
 import asyncio
 import json
 import logging
+import time
 from typing import Optional
 
 from app.config import settings
@@ -112,7 +113,11 @@ async def _call_groq(client, model: str, prompt: str, evidence_ids: list[str]) -
     )
     content = response.choices[0].message.content
     raw = json.loads(content)
-    return _validate_result(raw, evidence_ids)
+    result = _validate_result(raw, evidence_ids)
+    if result is not None and getattr(response, "usage", None):
+        result["tokens_in"] = response.usage.prompt_tokens or 0
+        result["tokens_out"] = response.usage.completion_tokens or 0
+    return result
 
 
 async def _groq_review(alert: Alert) -> Optional[dict]:
@@ -186,28 +191,51 @@ def _fake_review(alert: Alert) -> dict:
     }
 
 
-async def review_alert(alert: Alert) -> dict:
+# USD per 1M tokens (input, output) — estimate for the AI Activity spend meter (FR10.2).
+_PRICE_PER_M = {
+    "llama-3.3-70b-versatile": (0.59, 0.79),
+    "llama-3.1-8b-instant": (0.05, 0.08),
+}
+
+
+def estimate_cost(model: Optional[str], tokens_in: int, tokens_out: int) -> float:
+    pin, pout = _PRICE_PER_M.get(model or "", (0.0, 0.0))
+    return (tokens_in * pin + tokens_out * pout) / 1_000_000
+
+
+def _unavailable(alert: Alert, reason: str) -> dict:
+    return {
+        "fraud_category": alert.fraud_category,
+        "risk_adjustment": 0,
+        "recommended_decision": "investigate",
+        "reasoning": f"AI review unavailable ({reason}); rule-based score shown.",
+        "cited_evidence": [],
+        "model_used": None,
+        "ai_available": False,
+    }
+
+
+async def review_alert(alert: Alert, budget_left_usd: float = float("inf")) -> dict:
     """
-    Always returns a review dict. Falls back to rule-based stub when AI fails.
+    Always returns a review dict. Falls back to the rule-based result when AI fails.
     Keys: fraud_category, risk_adjustment, recommended_decision, reasoning,
-          cited_evidence, model_used, ai_available (bool).
+          cited_evidence, model_used, ai_available (bool), prompt, latency_ms,
+          tokens_in, tokens_out.
     """
+    prompt, _ = _build_prompt(alert)
+    started = time.monotonic()
+
     if settings.fake_llm:
         result = _fake_review(alert)
         result["ai_available"] = False
-        return result
+    elif budget_left_usd <= 0:
+        result = _unavailable(alert, "budget reached")
+    else:
+        result = await _groq_review(alert) or _unavailable(alert, "provider error")
+        result.setdefault("ai_available", True)
 
-    result = await _groq_review(alert)
-    if result is None:
-        return {
-            "fraud_category": alert.fraud_category,
-            "risk_adjustment": 0,
-            "recommended_decision": "investigate",
-            "reasoning": "AI review unavailable; rule-based score shown.",
-            "cited_evidence": [],
-            "model_used": None,
-            "ai_available": False,
-        }
-
-    result["ai_available"] = True
+    result["prompt"] = prompt  # built only from masked factors — this is what the model saw
+    result["latency_ms"] = int((time.monotonic() - started) * 1000)
+    result.setdefault("tokens_in", 0)
+    result.setdefault("tokens_out", 0)
     return result

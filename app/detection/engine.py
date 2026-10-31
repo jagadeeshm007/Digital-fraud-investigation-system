@@ -20,8 +20,41 @@ def _risk_band(score: int) -> str:
     return "Low"
 
 
-async def run_detection(session: AsyncSession, triggered_by: str = "investigator") -> dict:
+# Correlation: an entity flagged by several independent rules is riskier than any one rule says
+# (challenge: score from multiple indicators, not a single threshold).
+_CORRELATION_POINTS = 15
+_CORRELATION_CAP = 30
+
+
+def _family(rule_id: str) -> str:
+    return rule_id.split("-", 1)[0]  # "R3-ATO" -> "R3"
+
+
+def _add_correlation(hits: list) -> None:
+    families: dict[str, set[str]] = {}
+    for h in hits:
+        if not h.cleared and h.customer_id:
+            families.setdefault(h.customer_id, set()).add(_family(h.rule_id))
+    for h in hits:
+        if h.cleared or not h.customer_id:
+            continue
+        others = sorted(families[h.customer_id] - {_family(h.rule_id)})
+        if not others:
+            continue
+        pts = min(_CORRELATION_POINTS * len(others), _CORRELATION_CAP)
+        h.factors = [*h.factors, {
+            "factor": f"Same customer also flagged by rules {', '.join(others)}",
+            "points": pts,
+            "evidence_id": h.customer_id,
+        }]
+        h.base_score = min(100, h.base_score + pts)
+
+
+async def run_detection(
+    session: AsyncSession, triggered_by: str = "investigator", channel: str = "api"
+) -> dict:
     hits = await run_all_rules(session)
+    _add_correlation(hits)
 
     # Load existing (rule_id, entity_id) pairs to avoid duplicates
     existing = {
@@ -32,6 +65,7 @@ async def run_detection(session: AsyncSession, triggered_by: str = "investigator
     new_alerts = 0
     new_cases = 0
     cleared_count = 0
+    review_ids: list[str] = []
 
     for hit in hits:
         key = (hit.rule_id, hit.entity_id)
@@ -67,8 +101,9 @@ async def run_detection(session: AsyncSession, triggered_by: str = "investigator
 
         if hit.cleared:
             cleared_count += 1
-        else:
-            # Create a case for every open alert
+        elif band in ("Medium", "High"):
+            # FR7.1: only actionable (Medium/High) alerts open a case; Low stays on the dashboard
+            review_ids.append(alert.alert_id)
             case = Case(
                 case_id=str(uuid.uuid4()),
                 alert_id=alert.alert_id,
@@ -87,7 +122,7 @@ async def run_detection(session: AsyncSession, triggered_by: str = "investigator
     await write_audit(
         session,
         role=triggered_by,
-        channel="api",
+        channel=channel,
         action="run_detection",
         target=None,
         result=f"new_alerts={new_alerts} new_cases={new_cases} cleared={cleared_count}",
@@ -99,4 +134,5 @@ async def run_detection(session: AsyncSession, triggered_by: str = "investigator
         "new_cases": new_cases,
         "cleared_count": cleared_count,
         "total_hits": len(hits),
+        "review_alert_ids": review_ids,
     }

@@ -7,4 +7,6 @@ pandas>=2.2
 openpyxl>=3.1
 python-multipart>=0.0.12
 groq>=0.9
+mcp>=2.3,<3
+aiosqlite>=0.20
 hatchling>=1.21
