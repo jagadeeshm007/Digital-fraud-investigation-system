@@ -254,6 +254,11 @@ export function getAudit(page: number, pageSize: number): Promise<AuditPage> {
   return apiFetch<AuditPage>(`/audit?page=${page}&page_size=${pageSize}`)
 }
 
+/** Bundled synthetic data for all five sources (app/sample_data.py), one batch per source. */
+export function loadSampleData(): Promise<{ batches: IngestionBatch[] }> {
+  return apiFetch('/ingest/sample', { method: 'POST' })
+}
+
 export async function getRejected(batchId: string): Promise<RejectedRecord[]> {
   const body = await apiFetch<{ batch_id: string; records: RejectedRecord[] }>(
     `/ingest/${encodeURIComponent(batchId)}/rejected`,

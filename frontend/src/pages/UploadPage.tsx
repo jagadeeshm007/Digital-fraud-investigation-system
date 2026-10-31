@@ -1,4 +1,4 @@
-import { CircleAlertIcon, FileUpIcon } from 'lucide-react'
+import { CircleAlertIcon, DatabaseIcon, FileUpIcon } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import PageHeader from '@/components/PageHeader'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -16,6 +16,7 @@ import {
   ApiError,
   getRejected,
   ingestFile,
+  loadSampleData,
   SOURCE_TYPES,
   type IngestionBatch,
   type RejectedRecord,
@@ -34,6 +35,30 @@ export default function UploadPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [batch, setBatch] = useState<(IngestionBatch & { file_name: string }) | null>(null)
+  const [sample, setSample] = useState<IngestionBatch[] | null>(null)
+  const [loadingSample, setLoadingSample] = useState(false)
+
+  const loadSample = async () => {
+    setLoadingSample(true)
+    setError(null)
+    try {
+      const { batches } = await loadSampleData()
+      setSample(batches)
+      const accepted = batches.reduce((n, b) => n + b.accepted_count, 0)
+      const rejected = batches.reduce((n, b) => n + b.rejected_count, 0)
+      toastManager.add({
+        type: 'success',
+        title: 'Sample data loaded',
+        description: `${accepted.toLocaleString('en-IN')} records accepted across ${batches.length} sources${
+          rejected ? `, ${rejected} rejected (already loaded)` : ''
+        }`,
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load sample data')
+    } finally {
+      setLoadingSample(false)
+    }
+  }
   const [rejected, setRejected] = useState<RejectedRecord[]>([])
 
   const fileProblem = (f: File): string | null => {
@@ -80,7 +105,16 @@ export default function UploadPage() {
 
   return (
     <section className="space-y-5">
-      <PageHeader title="Data Upload" description="Load records from lending, insurance and core banking systems." />
+      <PageHeader
+        title="Data Upload"
+        description="Load records from lending, insurance and core banking systems."
+        action={
+          <Button variant="outline" onClick={() => void loadSample()} disabled={loadingSample}>
+            {loadingSample ? <Spinner /> : <DatabaseIcon />}
+            Load sample data
+          </Button>
+        }
+      />
 
       <Card>
         <CardPanel>
@@ -134,6 +168,41 @@ export default function UploadPage() {
           </Alert>
         )}
       </div>
+
+      {sample && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Sample data</CardTitle>
+            <CardDescription>
+              Synthetic records with planted fraud scenarios and lookalikes. Run detection from Alerts next.
+            </CardDescription>
+          </CardHeader>
+          <CardPanel>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Source</TableHead>
+                  <TableHead className="text-right">Accepted</TableHead>
+                  <TableHead className="text-right">Rejected</TableHead>
+                  <TableHead className="text-right">Warnings</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sample.map((b) => (
+                  <TableRow key={b.batch_id}>
+                    <TableCell>{SOURCE_TYPES.find((s) => s.value === b.source_type)?.label ?? b.source_type}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {b.accepted_count.toLocaleString('en-IN')}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{b.rejected_count}</TableCell>
+                    <TableCell className="text-right tabular-nums">{b.warning_count}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardPanel>
+        </Card>
+      )}
 
       {batch && (
         <Card>
