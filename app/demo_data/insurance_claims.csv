@@ -1,0 +1,6 @@
+claim_id,policy_id,customer_id,incident_date,claim_date,claim_type,amount_inr,description,payout_account_id
+IC001,POL001,C001,2024-01-01,2024-01-10,medical,50000.00,Hospital visit for fever treatment,ACC001
+IC002,POL001,C001,2024-01-20,2024-01-25,medical,50000.00,Repeat hospitalization same diagnosis,ACC001
+IC003,POL002,C003,2024-02-01,2024-02-05,vehicle,80000.00,Car accident repair,ACC003
+IC004,POL003,C004,2024-01-05,2024-01-08,property,120000.00,Flood damage to home,ACC004
+IC005,POL003,C004,2024-01-30,2024-02-03,property,120000.00,Duplicate flood damage claim,ACC004

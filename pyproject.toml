@@ -16,7 +16,15 @@ dependencies = [
     "openpyxl>=3.1",
     "python-multipart>=0.0.12",
     "groq>=0.9",
+    "mcp>=2.3,<3",
+    "aiosqlite>=0.20",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
@@ -25,3 +33,10 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 ignore = ["E501"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "app/mcp_server.py",   # B5 MCP gateway — deferred
+    "app/sample_data.py",  # seed-data loader, not business logic
+]

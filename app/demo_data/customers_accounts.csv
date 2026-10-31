@@ -1,0 +1,6 @@
+customer_id,name,date_of_birth,phone,email,address,identity_number,onboarded_at,source_system,account_id,product,opened_at,status
+C001,Alice Kumar,1985-03-15,9876543210,alice@testbank.in,12 Main St Chennai TN,IDTST001,2023-01-01T00:00:00+05:30,CORE,ACC001,savings,2023-01-01T00:00:00+05:30,active
+C002,Bob Singh,1990-07-22,9876543211,bob@testbank.in,45 Park Ave Mumbai MH,IDTST002,2023-02-01T00:00:00+05:30,CORE,ACC002,current,2023-02-01T00:00:00+05:30,active
+C003,Priya Patel,1988-11-30,9876543212,priya@testbank.in,78 MG Road Bangalore KA,IDTST003,2023-03-01T00:00:00+05:30,CORE,ACC003,savings,2023-03-01T00:00:00+05:30,active
+C004,Raj Sharma,1975-05-18,9876543213,raj@testbank.in,22 Link Rd Delhi DL,IDTST004,2023-01-15T00:00:00+05:30,CORE,ACC004,current,2023-01-15T00:00:00+05:30,active
+C005,Meena Reddy,1995-09-10,9876543214,meena@testbank.in,5 Beach Rd Chennai TN,IDTST005,2023-04-01T00:00:00+05:30,CORE,ACC005,savings,2023-04-01T00:00:00+05:30,active

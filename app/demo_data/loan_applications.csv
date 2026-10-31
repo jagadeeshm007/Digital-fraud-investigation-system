@@ -1,0 +1,5 @@
+application_id,customer_id,applied_at,amount_inr,device_id,ip_address,phone,address,disbursement_account_id,status
+L001,C001,2024-01-15T10:00:00+05:30,500000.00,DEV003,1.2.3.4,9876543210,12 Main St Chennai TN,ACC001,pending
+L002,C002,2024-01-16T10:00:00+05:30,600000.00,DEV003,5.6.7.8,9876543211,45 Park Ave Mumbai MH,ACC002,pending
+L003,C003,2024-01-17T10:00:00+05:30,300000.00,DEV003,9.10.11.12,9876543212,78 MG Road Bangalore KA,ACC003,approved
+L004,C005,2024-01-18T10:00:00+05:30,400000.00,DEV007,30.31.32.33,9876543214,5 Beach Rd Chennai TN,ACC005,pending
