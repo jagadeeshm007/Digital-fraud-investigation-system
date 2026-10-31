@@ -30,7 +30,12 @@ services:
       SERVE_FRONTEND: "1"
       MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-50}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      FAKE_LLM: ${FAKE_LLM:-1}
+      # Real AI review when GROQ_API_KEY is in .env; FAKE_LLM=1 forces the offline stub.
+      FAKE_LLM: ${FAKE_LLM:-0}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      AI_BUDGET_USD: ${AI_BUDGET_USD:-10}
+      AI_REVIEW_BATCH: ${AI_REVIEW_BATCH:-25}
     ports:
       - "${APP_PORT:-8000}:8000"
 
